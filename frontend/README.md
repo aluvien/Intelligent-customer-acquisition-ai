@@ -8,4 +8,4 @@ npm start       # http://localhost:3000
 npm run build   # 生产构建
 ```
 
-本地开发默认使用 `package.json` 中的 CRA proxy 转发到 `http://localhost:3001`。如需覆盖 API 地址，可复制 `.env.example` 为 `.env`；不要提交任何环境文件或凭据。
+本地开发使用 `src/setupProxy.js` 将 `/api` 和 `/ws` 转发到 `http://localhost:3001`。如需覆盖代理目标，可在未提交的 `.env.local` 中设置 `REACT_APP_PROXY_TARGET`；如需修改生产 API 前缀，可设置 `REACT_APP_API_URL`。不要提交任何环境文件或凭据。使用开发 Compose 时，代理目标应设置为容器内的 `http://backend:3001`。
