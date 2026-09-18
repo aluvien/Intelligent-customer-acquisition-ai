@@ -49,6 +49,6 @@ test('visitor cursors use visibility sequence and accept the legacy boundary', (
   const legacyCursor = parseVisitorMessageCursor(encodeMessageCursor('2026-09-19 04:05:06.123900+00', 'message-1'));
   assert.deepEqual(legacyCursor, { kind: 'createdAt', createdAt: '2026-09-19 04:05:06.123900+00', id: 'message-1' });
   const timestampOnly = Buffer.from(JSON.stringify({ createdAt: '2026-09-19 04:05:06.123900+00' }), 'utf8').toString('base64url');
-  assert.deepEqual(parseVisitorMessageCursor(timestampOnly), { kind: 'createdAt', createdAt: '2026-09-19 04:05:06.123900+00' });
+  assert.deepEqual(parseVisitorMessageCursor(timestampOnly), { kind: 'createdAt', createdAt: '2026-09-19 04:05:06.123900+00', id: undefined });
   assert.throws(() => parseVisitorMessageCursor(encodeVisitorMessageCursor('9999999999999999999', 'message-overflow')));
 });
