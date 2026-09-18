@@ -7,6 +7,7 @@ import { AppError } from '../errors';
 import { requireAuth } from '../middleware/auth';
 import { checkOrigin, clearRefreshCookie, parseCookies, REFRESH_COOKIE, setRefreshCookie } from '../security/cookies';
 import { isUniqueViolation } from './helpers';
+import { disconnectSession, disconnectUser } from '../realtime/hub';
 
 const router = express.Router();
 
@@ -162,6 +163,7 @@ router.post('/refresh', async (req, res, next) => {
 router.post('/logout', requireAuth, async (req, res, next) => {
   try {
     await query('UPDATE auth_sessions SET revoked_at = COALESCE(revoked_at, NOW()) WHERE id = $1', [req.auth!.sessionId]);
+    disconnectSession(req.auth!.sessionId);
     clearRefreshCookie(res);
     res.json({ success: true, message: '已退出登录', data: null });
   } catch (error) {
@@ -179,6 +181,7 @@ router.put('/password', requireAuth, async (req, res, next) => {
       await client.query('UPDATE users SET password_hash = $1, password_changed_at = NOW(), updated_at = NOW() WHERE id = $2', [passwordHash, user.id]);
       await client.query('UPDATE auth_sessions SET revoked_at = NOW() WHERE user_id = $1', [user.id]);
     });
+    disconnectUser(user.id);
     clearRefreshCookie(res);
     res.json({ success: true, message: '密码修改成功，请重新登录', data: null });
   } catch (error) {

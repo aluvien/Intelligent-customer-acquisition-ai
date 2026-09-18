@@ -30,7 +30,16 @@ openssl rand -base64 48  # 写入 JWT_SECRET
 openssl rand -base64 32  # 写入 ENCRYPTION_KEY
 ```
 
-填写数据库、CORS 和真实 AI 配置后启动：
+填写数据库、CORS 和真实 AI 配置后启动。当前 Coze 配置使用 v3 API：
+
+```dotenv
+AI_PROVIDER=coze
+COZE_API_URL=https://api.coze.cn/v3
+COZE_BOT_ID=your-bot-id
+COZE_TOKEN=your-server-token
+```
+
+真实 Token 只放在服务端密钥管理中，详见 [`Coze配置指南.md`](Coze配置指南.md)。
 
 ```bash
 docker compose up -d --build
@@ -71,7 +80,7 @@ npm ci
 npm start
 ```
 
-本地 API 默认 `http://localhost:3001`，前端默认 `http://localhost:3000`。数据库迁移文件位于 `backend/src/db/migrations/`。
+本地 API 默认 `http://localhost:3001`，前端默认 `http://localhost:3000`。开发 Compose 会把 `/api` 和 `/ws` 代理到 `backend` 服务；分别启动前端时则代理到 `localhost:3001`。数据库迁移文件位于 `backend/src/db/migrations/`，迁移脚本使用 PostgreSQL advisory lock，避免多个实例并发执行同一迁移。
 
 ## 能力边界
 

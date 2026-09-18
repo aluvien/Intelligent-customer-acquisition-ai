@@ -1,5 +1,7 @@
 # access_token 与 live-im-proxy 对接分析
 
+> 历史资料：其中的应用标识、代理路径和协议结论均已失效或未核验。当前以 `README.md` 与 `docs/rebuild/DOUYIN_CAPABILITY_MATRIX.md` 为准，不要用本文配置平台接入。
+
 ## 🎯 核心问题
 
 主公问：**live-im-proxy 需要的秘钥等数据，能不能通过 access_token 来转换？**
@@ -226,3 +228,4 @@ live-im-proxy 需要的参数中：
 
 **创建时间**：2025-10-27  
 **状态**：需要验证 WebSocket 连接
+> 历史资料：其中的应用标识、代理路径和协议结论均已失效或未核验。当前以 `README.md` 与 `docs/rebuild/DOUYIN_CAPABILITY_MATRIX.md` 为准，不要用本文配置平台接入。

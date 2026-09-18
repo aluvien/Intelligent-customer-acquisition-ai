@@ -1,4 +1,12 @@
 import bcrypt from 'bcryptjs';
+import fs from 'fs';
+import path from 'path';
+import dotenv from 'dotenv';
+
+const envFiles = [process.env.ENV_FILE, path.resolve(process.cwd(), '.env'), path.resolve(process.cwd(), '../.env')].filter(Boolean) as string[];
+const envFile = envFiles.find((candidate) => fs.existsSync(candidate));
+if (envFile) dotenv.config({ path: envFile });
+
 import { query, withTransaction, pool } from '../db';
 import { randomId } from '../config';
 

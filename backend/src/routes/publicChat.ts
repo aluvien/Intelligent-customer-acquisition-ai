@@ -8,7 +8,7 @@ import { optionalText, requireText } from './helpers';
 
 const router = express.Router();
 
-type VisitorContext = { sessionId: string; tenantId: string; widgetId: string; visitorId: string; conversationId?: string };
+type VisitorContext = { sessionId: string; tenantId: string; widgetId: string; visitorId: string; tenantStatus: string };
 
 function assertAllowedOrigin(origin: string | undefined, allowedOrigins: string[]): void {
   if (origin && !allowedOrigins.includes(origin)) throw new AppError(403, 'ORIGIN_FORBIDDEN', '访客入口不允许当前来源');
@@ -18,9 +18,12 @@ async function visitorContext(req: express.Request): Promise<VisitorContext> {
   const token = req.headers['x-visitor-token'];
   if (typeof token !== 'string' || !token) throw new AppError(401, 'VISITOR_AUTH_REQUIRED', '访客会话凭证缺失');
   const result = await query<VisitorContext & { expires_at: Date }>(
-    `SELECT vs.id AS "sessionId", vs.tenant_id AS "tenantId", vs.widget_id AS "widgetId", vs.visitor_id AS "visitorId", vs.expires_at
-       FROM visitor_sessions vs JOIN widgets w ON w.id = vs.widget_id
-      WHERE vs.id = $1 AND vs.token_hash = $2 AND vs.expires_at > NOW() AND w.enabled = TRUE`,
+    `SELECT vs.id AS "sessionId", vs.tenant_id AS "tenantId", vs.widget_id AS "widgetId", vs.visitor_id AS "visitorId", vs.expires_at, t.status AS "tenantStatus"
+       FROM visitor_sessions vs
+       JOIN widgets w ON w.id = vs.widget_id AND w.tenant_id = vs.tenant_id
+       JOIN tenants t ON t.id = vs.tenant_id
+      WHERE vs.id = $1 AND vs.token_hash = $2 AND vs.expires_at > NOW()
+        AND w.enabled = TRUE AND t.status = 'active'`,
     [req.params.sessionId, hashOpaqueToken(token)],
   );
   const context = result.rows[0];
@@ -34,8 +37,8 @@ async function visitorContext(req: express.Request): Promise<VisitorContext> {
 
 router.post('/widgets/:widgetId/sessions', async (req, res, next) => {
   try {
-    const widget = await query<{ id: string; tenant_id: string; enabled: boolean; allowed_origins: string[] }>('SELECT id, tenant_id, enabled, allowed_origins FROM widgets WHERE id = $1', [req.params.widgetId]);
-    if (!widget.rows[0] || !widget.rows[0].enabled) throw new AppError(404, 'WIDGET_NOT_FOUND', '访客入口不存在或已停用');
+    const widget = await query<{ id: string; tenant_id: string; enabled: boolean; allowed_origins: string[]; tenant_status: string }>('SELECT w.id, w.tenant_id, w.enabled, w.allowed_origins, t.status AS tenant_status FROM widgets w JOIN tenants t ON t.id = w.tenant_id WHERE w.id = $1', [req.params.widgetId]);
+    if (!widget.rows[0] || !widget.rows[0].enabled || widget.rows[0].tenant_status !== 'active') throw new AppError(404, 'WIDGET_NOT_FOUND', '访客入口不存在或已停用');
     assertAllowedOrigin(req.headers.origin, widget.rows[0].allowed_origins || []);
     // The visitor identity is server generated. Accepting a client supplied ID would let a second
     // visitor deliberately collide with another session and read its conversation history.
@@ -50,8 +53,18 @@ router.post('/widgets/:widgetId/sessions', async (req, res, next) => {
 router.get('/sessions/:sessionId/messages', async (req, res, next) => {
   try {
     const context = await visitorContext(req);
-    const result = await query(`SELECT id, conversation_id AS "conversationId", direction, sender_type AS "senderType", content, delivery_status AS "deliveryStatus", created_at AS "createdAt" FROM messages WHERE tenant_id = $1 AND conversation_id IN (SELECT id FROM conversations WHERE tenant_id = $1 AND widget_id = $2 AND external_user_id = $3) ORDER BY created_at ASC LIMIT 200`, [context.tenantId, context.widgetId, context.visitorId]);
-    res.json({ success: true, message: '获取消息成功', data: { messages: result.rows } });
+    const beforeRaw = typeof req.query.before === 'string' ? req.query.before : undefined;
+    const before = beforeRaw ? new Date(beforeRaw) : undefined;
+    if (beforeRaw && (!before || Number.isNaN(before.getTime()))) throw new AppError(400, 'INVALID_CURSOR', '消息游标无效');
+    const messages = await withTransaction(async (client) => {
+      await client.query(`UPDATE messages SET delivery_status = 'delivered' WHERE tenant_id = $1 AND direction = 'outbound' AND delivery_status = 'provider_accepted' AND conversation_id IN (SELECT id FROM conversations WHERE tenant_id = $1 AND widget_id = $2 AND external_user_id = $3)`, [context.tenantId, context.widgetId, context.visitorId]);
+      const values: unknown[] = [context.tenantId, context.widgetId, context.visitorId];
+      const cursorFilter = before ? ` AND created_at < $4` : '';
+      if (before) values.push(before.toISOString());
+      const result = await client.query(`SELECT id, conversation_id AS "conversationId", direction, sender_type AS "senderType", content, delivery_status AS "deliveryStatus", created_at AS "createdAt" FROM messages WHERE tenant_id = $1 AND conversation_id IN (SELECT id FROM conversations WHERE tenant_id = $1 AND widget_id = $2 AND external_user_id = $3) AND (direction = 'inbound' OR delivery_status IN ('provider_accepted', 'delivered'))${cursorFilter} ORDER BY created_at DESC LIMIT 200`, values);
+      return { rows: result.rows.reverse(), hasMore: result.rowCount === 200, nextBefore: result.rows.length === 200 ? new Date(result.rows[result.rows.length - 1].createdAt).toISOString() : null };
+    });
+    res.json({ success: true, message: '获取消息成功', data: { messages: messages.rows, pagination: { hasMore: messages.hasMore, nextBefore: messages.nextBefore } } });
   } catch (error) { next(error); }
 });
 
@@ -65,13 +78,16 @@ router.post('/sessions/:sessionId/messages', async (req, res, next) => {
     const idempotencyKey = headerIdempotencyKey;
     const eventSource = `web:${context.widgetId}:${context.visitorId}`;
     const result = await withTransaction(async (client) => {
-      const conversation = await client.query<{ id: string; mode: 'human' | 'ai_draft' | 'auto'; mode_version: number }>(
-        `SELECT id, mode, mode_version FROM conversations WHERE tenant_id = $1 AND widget_id = $2 AND external_user_id = $3 FOR UPDATE`,
+      // Serialize the first message for one visitor session. FOR UPDATE cannot lock a missing row.
+      await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [context.sessionId]);
+      const conversation = await client.query<{ id: string; mode: 'human' | 'ai_draft' | 'auto'; mode_version: number; status: string }>(
+        `SELECT id, mode, mode_version, status FROM conversations WHERE tenant_id = $1 AND widget_id = $2 AND external_user_id = $3 FOR UPDATE`,
         [context.tenantId, context.widgetId, context.visitorId],
       );
       let conversationId = conversation.rows[0]?.id;
       let mode = conversation.rows[0]?.mode || 'ai_draft';
       let modeVersion = conversation.rows[0]?.mode_version || 1;
+      if (conversation.rows[0]?.status === 'closed') throw new AppError(409, 'CONVERSATION_CLOSED', '对话已关闭，请重新打开访客入口开始新会话');
       if (!conversationId) {
         conversationId = randomId();
         await client.query(`INSERT INTO conversations(id, tenant_id, widget_id, visitor_session_id, external_user_id, user_nickname, mode) VALUES ($1, $2, $3, $4, $5, $6, 'ai_draft')`, [conversationId, context.tenantId, context.widgetId, context.sessionId, context.visitorId, nickname]);
@@ -89,13 +105,18 @@ router.post('/sessions/:sessionId/messages', async (req, res, next) => {
       await client.query('UPDATE conversations SET message_count = message_count + 1, last_message_at = NOW() WHERE id = $1', [conversationId]);
       const aiRunId = randomId();
       if (mode !== 'human') {
-        await client.query(`INSERT INTO ai_runs(id, tenant_id, conversation_id, message_id, provider, status) VALUES ($1, $2, $3, $4, $5, 'queued')`, [aiRunId, context.tenantId, conversationId, messageId, process.env.AI_PROVIDER || 'coze']);
-        await insertJob(client, context.tenantId, 'ai_draft', { conversationId, messageId, aiRunId, modeVersion });
+        const budget = await client.query<{ count: string }>(`SELECT COUNT(*)::text AS count FROM ai_runs WHERE tenant_id = $1 AND conversation_id = $2 AND created_at >= NOW() - INTERVAL '1 hour'`, [context.tenantId, conversationId]);
+        if (Number(budget.rows[0]?.count || 0) >= config.aiMaxRunsPerConversationHour) {
+          await client.query(`INSERT INTO ai_runs(id, tenant_id, conversation_id, message_id, provider, status, error, completed_at) VALUES ($1, $2, $3, $4, $5, 'blocked', $6, NOW())`, [aiRunId, context.tenantId, conversationId, messageId, process.env.AI_PROVIDER || 'coze', 'AI_MAX_RUNS_PER_CONVERSATION_HOUR']);
+        } else {
+          await client.query(`INSERT INTO ai_runs(id, tenant_id, conversation_id, message_id, provider, status) VALUES ($1, $2, $3, $4, $5, 'queued')`, [aiRunId, context.tenantId, conversationId, messageId, process.env.AI_PROVIDER || 'coze']);
+          await insertJob(client, context.tenantId, 'ai_draft', { conversationId, messageId, aiRunId, modeVersion });
+        }
       }
       return { conversationId, messageId, aiRunId: mode === 'human' ? undefined : aiRunId, mode, modeVersion, duplicate: false };
     });
     if (!result.duplicate) broadcast(context.tenantId, { type: 'message', data: { id: result.messageId, conversationId: result.conversationId, direction: 'inbound', senderType: 'visitor', content, deliveryStatus: 'received', createdAt: new Date().toISOString() }, timestamp: new Date().toISOString() });
-    res.status(201).json({ success: true, message: '消息已接收', data: { conversationId: result.conversationId, messageId: result.messageId, aiRunId: result.aiRunId || null } });
+    res.status(result.duplicate ? 200 : 201).json({ success: true, message: result.duplicate ? '已返回此前的消息结果' : '消息已接收', data: { conversationId: result.conversationId, messageId: result.messageId, aiRunId: result.aiRunId || null } });
   } catch (error) { next(error); }
 });
 
@@ -108,8 +129,9 @@ router.post('/sessions/:sessionId/lead', async (req, res, next) => {
     if (phone && !/^[+0-9() .-]{6,64}$/.test(phone)) throw new AppError(400, 'INVALID_PHONE', '手机号格式无效');
     if (email && (email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))) throw new AppError(400, 'INVALID_EMAIL', '邮箱格式无效');
     if (req.body?.consent !== true) throw new AppError(400, 'CONSENT_REQUIRED', '提交联系方式前需要确认同意');
-    const conversation = await query<{ id: string; channel_account_id: string | null; external_user_id: string; user_nickname: string }>('SELECT id, channel_account_id, external_user_id, user_nickname FROM conversations WHERE tenant_id = $1 AND widget_id = $2 AND external_user_id = $3 ORDER BY created_at DESC LIMIT 1', [context.tenantId, context.widgetId, context.visitorId]);
+    const conversation = await query<{ id: string; channel_account_id: string | null; external_user_id: string; user_nickname: string; status: string }>('SELECT id, channel_account_id, external_user_id, user_nickname, status FROM conversations WHERE tenant_id = $1 AND widget_id = $2 AND external_user_id = $3 ORDER BY created_at DESC LIMIT 1', [context.tenantId, context.widgetId, context.visitorId]);
     if (!conversation.rows[0]) throw new AppError(409, 'CONVERSATION_REQUIRED', '请先发送一条咨询消息');
+    if (conversation.rows[0].status === 'closed') throw new AppError(409, 'CONVERSATION_CLOSED', '对话已关闭，请重新打开访客入口开始新会话');
     const consentVersion = typeof req.body?.consentVersion === 'string' && req.body.consentVersion.trim() ? req.body.consentVersion.trim().slice(0, 40) : 'v1';
     const result = await query(`INSERT INTO leads(id, tenant_id, conversation_id, channel_account_id, external_user_id, user_nickname, phone, email, contact_source, consent_at, consent_version) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'customer_submitted', NOW(), $9) ON CONFLICT (tenant_id, conversation_id) DO UPDATE SET phone = COALESCE(EXCLUDED.phone, leads.phone), email = COALESCE(EXCLUDED.email, leads.email), consent_at = EXCLUDED.consent_at, consent_version = EXCLUDED.consent_version, updated_at = NOW() RETURNING id, status, created_at AS "createdAt"`, [randomId(), context.tenantId, conversation.rows[0].id, conversation.rows[0].channel_account_id, conversation.rows[0].external_user_id, conversation.rows[0].user_nickname, phone || null, email || null, consentVersion]);
     res.status(201).json({ success: true, message: '联系方式已提交', data: { lead: result.rows[0] } });

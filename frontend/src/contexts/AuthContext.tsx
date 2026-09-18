@@ -8,7 +8,7 @@ interface AuthContextType {
   isLoggedIn: boolean;
   login: (username: string, password: string) => Promise<void>;
   register: (username: string, email: string, password: string, confirmPassword: string, tenantName?: string) => Promise<void>;
-  logout: () => void;
+  logout: () => Promise<void>;
   refreshUser: () => Promise<void>;
 }
 
@@ -31,7 +31,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
           setUser(userData);
           localStorage.setItem('user', JSON.stringify(userData));
         } catch {
-          authService.logout();
+          await authService.logout();
           setUser(null);
         }
       }
@@ -66,8 +66,8 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     }
   };
 
-  const logout = () => {
-    authService.logout();
+  const logout = async () => {
+    await authService.logout();
     setUser(null);
   };
 

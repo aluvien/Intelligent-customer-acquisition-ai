@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Badge, Button, Card, Empty, Input, List, Select, Space, Spin, Tag, Typography, message } from 'antd';
 import { CloseCircleOutlined, MessageOutlined, SendOutlined, UserOutlined } from '@ant-design/icons';
 import api from '../../services/api';
@@ -26,6 +26,13 @@ type ConversationMessage = {
   createdAt: string;
 };
 
+type AiDraft = {
+  aiRunId: string;
+  conversationId: string;
+  draft: string;
+  evidence?: Array<{ title: string; version?: number }>;
+};
+
 const ActiveConversations: React.FC = () => {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [selected, setSelected] = useState<Conversation | null>(null);
@@ -35,13 +42,20 @@ const ActiveConversations: React.FC = () => {
   const [detailLoading, setDetailLoading] = useState(false);
   const [status, setStatus] = useState('active');
   const [error, setError] = useState<string | null>(null);
+  const [drafts, setDrafts] = useState<Record<string, AiDraft>>({});
+  const messageIds = useRef<Set<string>>(new Set());
+  const conversationIds = useRef<Set<string>>(new Set());
+  const pendingMessageKey = useRef<string | null>(null);
+  const messageRequestId = useRef(0);
 
   const loadConversations = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
       const response = await api.get('/conversations', { params: { status: status === 'all' ? undefined : status, limit: 100 } });
-      setConversations(response.data.data.conversations || []);
+      const nextConversations: Conversation[] = response.data.data.conversations || [];
+      conversationIds.current = new Set(nextConversations.map((item) => item.id));
+      setConversations(nextConversations);
     } catch (err: any) {
       setError(err?.response?.data?.message || '对话数据加载失败');
     } finally {
@@ -50,15 +64,19 @@ const ActiveConversations: React.FC = () => {
   }, [status]);
 
   const loadMessages = useCallback(async (conversation: Conversation) => {
+    const requestId = ++messageRequestId.current;
+    pendingMessageKey.current = null;
     setSelected(conversation);
     setDetailLoading(true);
     try {
       const response = await api.get(`/conversations/${conversation.id}/messages`);
-      setMessages(response.data.data.messages || []);
+      const nextMessages: ConversationMessage[] = response.data.data.messages || [];
+      nextMessages.forEach((item) => messageIds.current.add(item.id));
+      if (requestId === messageRequestId.current) setMessages(nextMessages);
     } catch (err: any) {
       message.error(err?.response?.data?.message || '消息加载失败');
     } finally {
-      setDetailLoading(false);
+      if (requestId === messageRequestId.current) setDetailLoading(false);
     }
   }, []);
 
@@ -67,26 +85,63 @@ const ActiveConversations: React.FC = () => {
   useEffect(() => {
     const disconnect = connectRealtime({
       onEvent: (event) => {
+        if (event.type === 'ai_draft') {
+          const draft = event.data as AiDraft;
+          if (draft?.aiRunId && draft?.conversationId && draft.draft) setDrafts((items) => ({ ...items, [draft.aiRunId]: draft }));
+          return;
+        }
         if (event.type !== 'message') return;
         const incoming = event.data as ConversationMessage & { conversationId: string };
-        setConversations((items) => items.map((item) => item.id === incoming.conversationId ? { ...item, messageCount: item.messageCount + 1, lastMessageAt: incoming.createdAt || new Date().toISOString(), latestMessage: { content: incoming.content, direction: incoming.direction } } : item));
-        if (selected?.id === incoming.conversationId) setMessages((items) => items.some((item) => item.id === incoming.id) ? items : [...items, incoming]);
+        const known = messageIds.current.has(incoming.id);
+        messageIds.current.add(incoming.id);
+        if (conversationIds.current.has(incoming.conversationId)) {
+          setConversations((items) => items.map((item) => item.id === incoming.conversationId ? {
+            ...item,
+            messageCount: known ? item.messageCount : item.messageCount + 1,
+            lastMessageAt: incoming.createdAt || new Date().toISOString(),
+            latestMessage: { content: incoming.content, direction: incoming.direction },
+          } : item));
+        } else {
+          void loadConversations();
+        }
+        if (selected?.id === incoming.conversationId) {
+          setMessages((items) => items.some((item) => item.id === incoming.id)
+            ? items.map((item) => item.id === incoming.id ? { ...item, ...incoming } : item)
+            : [...items, incoming]);
+        }
       },
     });
     return disconnect;
-  }, [selected?.id]);
+  }, [selected?.id, loadConversations]);
 
-  const counts = useMemo(() => ({ active: conversations.filter((item) => item.status === 'active').length, closed: conversations.filter((item) => item.status === 'closed').length }), [conversations]);
+  const counts = useMemo(() => ({
+    active: conversations.filter((item) => item.status === 'active').length,
+    closed: conversations.filter((item) => item.status === 'closed').length,
+  }), [conversations]);
 
   const send = async () => {
     if (!selected || !content.trim()) return;
+    const idempotencyKey = pendingMessageKey.current || crypto.randomUUID();
+    pendingMessageKey.current = idempotencyKey;
     try {
-      const response = await api.post(`/conversations/${selected.id}/messages`, { content: content.trim() });
+      const response = await api.post(`/conversations/${selected.id}/messages`, { content: content.trim() }, { headers: { 'Idempotency-Key': idempotencyKey } });
+      pendingMessageKey.current = null;
       setContent('');
       message.success(response.data.message || '回复已进入发送队列');
       await loadMessages(selected);
     } catch (err: any) {
       message.error(err?.response?.data?.message || '回复发送失败');
+    }
+  };
+
+  const approveDraft = async (draft: AiDraft) => {
+    try {
+      const response = await api.post(`/conversations/${draft.conversationId}/drafts/${draft.aiRunId}/approve`, { content: draft.draft }, { headers: { 'Idempotency-Key': `approve-${draft.aiRunId}` } });
+      message.success(response.data.message || '草稿已批准');
+      setDrafts((items) => { const next = { ...items }; delete next[draft.aiRunId]; return next; });
+      if (selected) await loadMessages(selected);
+    } catch (err: any) {
+      message.error(err?.response?.data?.message || '草稿批准失败');
     }
   };
 
@@ -102,6 +157,8 @@ const ActiveConversations: React.FC = () => {
     }
   };
 
+  const selectedDrafts = selected ? Object.values(drafts).filter((draft) => draft.conversationId === selected.id) : [];
+
   return <div style={{ padding: '4px 0' }}>
     <BusinessPageHeader icon={<MessageOutlined />} title="客服工作台" subtitle="真实会话、消息状态与人工接管" extra={<Space><Badge status="processing" text={`${counts.active} 个进行中`} /><Button onClick={() => void loadConversations()}>刷新</Button></Space>} />
     {error && <Alert type="error" showIcon message={error} style={{ marginBottom: 16 }} />}
@@ -111,8 +168,9 @@ const ActiveConversations: React.FC = () => {
           <List.Item.Meta avatar={<Badge dot={item.status === 'active'}><UserOutlined /></Badge>} title={<Space><span>{item.userNickname}</span><Tag>{item.mode === 'human' ? '人工' : item.mode === 'auto' ? '自动' : 'AI草稿'}</Tag></Space>} description={<Typography.Paragraph ellipsis={{ rows: 2 }} style={{ margin: 0 }}>{item.latestMessage?.content || '暂无消息'}<br /><Typography.Text type="secondary">{item.messageCount} 条 · {new Date(item.lastMessageAt).toLocaleString()}</Typography.Text></Typography.Paragraph>} />
         </List.Item>} />}
       </Card>
-      <Card title={selected ? `${selected.userNickname} · ${selected.status}` : '选择一个会话'} extra={selected && <Space><Button danger icon={<CloseCircleOutlined />} onClick={() => void close()} disabled={selected.status === 'closed'}>关闭</Button><Select value={selected.mode} onChange={async (mode) => { await api.put(`/conversations/${selected.id}/mode`, { mode }); setSelected({ ...selected, mode }); }} options={[{ value: 'human', label: '人工接管' }, { value: 'ai_draft', label: 'AI草稿' }, { value: 'auto', label: '自动回复（管理员）' }]} style={{ width: 150 }} /></Space>}>
+      <Card title={selected ? `${selected.userNickname} · ${selected.status}` : '选择一个会话'} extra={selected && <Space><Button danger icon={<CloseCircleOutlined />} onClick={() => void close()} disabled={selected.status === 'closed'}>关闭</Button><Select value={selected.mode} onChange={async (mode) => { try { await api.put(`/conversations/${selected.id}/mode`, { mode }); setSelected({ ...selected, mode }); await loadConversations(); } catch (err: any) { message.error(err?.response?.data?.message || '会话模式更新失败'); } }} options={[{ value: 'human', label: '人工接管' }, { value: 'ai_draft', label: 'AI草稿' }, { value: 'auto', label: '自动回复（管理员）' }]} style={{ width: 150 }} /></Space>}>
         {!selected ? <Empty description="选择会话查看历史" /> : detailLoading ? <Spin /> : <>
+          {selectedDrafts.map((draft) => <Alert key={draft.aiRunId} type="info" showIcon style={{ marginBottom: 12 }} message="AI 草稿（需人工批准）" description={<><Input.TextArea value={draft.draft} onChange={(event) => setDrafts((items) => ({ ...items, [draft.aiRunId]: { ...draft, draft: event.target.value } }))} autoSize={{ minRows: 2, maxRows: 5 }} /><Button type="primary" style={{ marginTop: 8 }} onClick={() => void approveDraft(draft)}>批准并发送</Button></>} />)}
           <div style={{ height: 420, overflowY: 'auto', padding: '8px 0' }}>{messages.map((item) => <div key={item.id} style={{ display: 'flex', justifyContent: item.direction === 'outbound' ? 'flex-end' : 'flex-start', marginBottom: 12 }}><div style={{ maxWidth: '72%', padding: '10px 12px', borderRadius: 10, background: item.direction === 'outbound' ? BUSINESS_THEME.primary : '#f4f6f8', color: item.direction === 'outbound' ? '#fff' : '#1A2332' }}><div>{item.content}</div><Typography.Text style={{ fontSize: 11, color: item.direction === 'outbound' ? 'rgba(255,255,255,.75)' : '#778' }}>{new Date(item.createdAt).toLocaleString()} · {item.deliveryStatus}</Typography.Text></div></div>)}</div>
           <Space.Compact style={{ width: '100%' }}><Input.TextArea autoSize={{ minRows: 2, maxRows: 5 }} value={content} onChange={(event) => setContent(event.target.value)} onPressEnter={(event) => { if (!event.shiftKey) { event.preventDefault(); void send(); } }} placeholder="输入人工回复，Enter 发送，Shift+Enter 换行" /><Button type="primary" icon={<SendOutlined />} onClick={() => void send()}>发送</Button></Space.Compact>
         </>}

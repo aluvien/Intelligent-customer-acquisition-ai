@@ -27,5 +27,8 @@ export function optionalText(value: unknown, maxLength = 4000): string | undefin
 }
 
 export function isUniqueViolation(error: unknown): boolean {
-  return Boolean(error && typeof error === 'object' && 'code' in error && (error as { code?: string }).code === '23505');
+  return Boolean(error && typeof error === 'object' && (
+    ('code' in error && (error as { code?: string }).code === '23505') ||
+    ('causeCode' in error && (error as { causeCode?: string }).causeCode === '23505')
+  ));
 }

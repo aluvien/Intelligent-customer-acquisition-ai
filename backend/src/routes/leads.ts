@@ -36,7 +36,15 @@ router.get('/:id', async (req, res, next) => {
     const result = await query(`SELECT l.id, l.conversation_id AS "conversationId", l.channel_account_id AS "channelId", l.external_user_id AS "userId", l.user_nickname AS "userNickname", l.phone, l.email, l.contact_source AS "contactSource", l.consent_at AS "consentAt", l.consent_version AS "consentVersion", l.score, l.status, l.assigned_to AS "assignedTo", l.tags, l.notes, l.created_at AS "createdAt", l.updated_at AS "updatedAt" FROM leads l WHERE l.id = $1 AND l.tenant_id = $2`, [req.params.id, tenantId(req)]);
     if (!result.rowCount) throw new AppError(404, 'LEAD_NOT_FOUND', '线索不存在');
     const followups = await query(`SELECT id, user_id AS "userId", action, note, created_at AS "createdAt" FROM lead_followups WHERE lead_id = $1 AND tenant_id = $2 ORDER BY created_at DESC`, [req.params.id, tenantId(req)]);
-    res.json({ success: true, message: '获取线索成功', data: { lead: result.rows[0], followups: followups.rows } });
+    const lead = { ...result.rows[0] } as { phone?: string | null; email?: string | null; [key: string]: unknown };
+    if (req.auth?.role === 'viewer') {
+      if (lead.phone) lead.phone = lead.phone.length <= 4 ? '****' : `${'*'.repeat(Math.max(4, lead.phone.length - 4))}${lead.phone.slice(-4)}`;
+      if (lead.email) {
+        const at = lead.email.indexOf('@');
+        lead.email = at > 1 ? `${lead.email[0]}***${lead.email.slice(at)}` : '***';
+      }
+    }
+    res.json({ success: true, message: '获取线索成功', data: { lead, followups: followups.rows } });
   } catch (error) { next(error); }
 });
 
@@ -51,6 +59,7 @@ router.post('/', requireRole('admin', 'operator'), async (req, res, next) => {
     if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new AppError(400, 'INVALID_EMAIL', '邮箱格式无效');
     const contactSource = typeof req.body?.contactSource === 'string' ? req.body.contactSource : 'customer_submitted';
     if (!['customer_submitted', 'authorized'].includes(contactSource)) throw new AppError(400, 'INVALID_CONTACT_SOURCE', '联系方式来源无效');
+    if (req.body?.consentConfirmed !== true) throw new AppError(400, 'CONSENT_REQUIRED', '登记联系方式前必须确认客户已同意');
     const score = req.body?.score === undefined || req.body?.score === null ? 0 : Number(req.body.score);
     if (!Number.isFinite(score) || score < 0 || score > 10) throw new AppError(400, 'INVALID_SCORE', '评分必须在 0 到 10 之间');
     const conversation = await query<{ id: string; channel_account_id: string | null; external_user_id: string; user_nickname: string }>('SELECT id, channel_account_id, external_user_id, user_nickname FROM conversations WHERE id = $1 AND tenant_id = $2', [conversationId, tenant]);
@@ -102,7 +111,7 @@ router.post('/:id/assign', requireRole('admin', 'operator'), async (req, res, ne
     const assignedTo = requireText(req.body?.assignedTo, 'assignedTo', 100);
     const user = await query('SELECT id FROM users WHERE id = $1 AND tenant_id = $2 AND status = \'active\'', [assignedTo, tenantId(req)]);
     if (!user.rowCount) throw new AppError(400, 'INVALID_ASSIGNEE', '负责人不存在或已停用');
-    const result = await query(`UPDATE leads SET assigned_to = $1, status = CASE WHEN status = 'new' THEN 'contacted' ELSE status END, updated_at = NOW() WHERE id = $2 AND tenant_id = $3 RETURNING id, assigned_to AS "assignedTo", status`, [assignedTo, req.params.id, tenantId(req)]);
+    const result = await query(`UPDATE leads SET assigned_to = $1, updated_at = NOW() WHERE id = $2 AND tenant_id = $3 RETURNING id, assigned_to AS "assignedTo", status`, [assignedTo, req.params.id, tenantId(req)]);
     if (!result.rowCount) throw new AppError(404, 'LEAD_NOT_FOUND', '线索不存在');
     res.json({ success: true, message: '线索已分配', data: { lead: result.rows[0] } });
   } catch (error) { next(error); }

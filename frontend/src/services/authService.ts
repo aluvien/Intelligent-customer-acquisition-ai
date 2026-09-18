@@ -1,4 +1,4 @@
-import api from './api';
+import api, { beginLogout, clearStoredAuth, endLogout } from './api';
 import { User, ApiResponse } from '../types';
 
 export interface LoginRequest {
@@ -55,11 +55,22 @@ export class AuthService {
   }
 
   // 登出
-  logout(): void {
-    void api.post('/auth/logout').catch(() => undefined);
-    localStorage.removeItem('token');
-    localStorage.removeItem('user');
-    localStorage.removeItem('tenantId');
+  async logout(): Promise<void> {
+    const token = localStorage.getItem('token');
+    beginLogout();
+    try {
+      if (token) {
+        await api.post('/auth/logout', undefined, {
+          skipAuthRefresh: true,
+          headers: { Authorization: `Bearer ${token}` },
+        });
+      }
+    } catch {
+      // Local credentials are still cleared when the server is unreachable.
+    } finally {
+      clearStoredAuth();
+      endLogout();
+    }
   }
 
   // 检查是否已登录

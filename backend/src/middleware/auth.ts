@@ -2,6 +2,7 @@ import express from 'express';
 import jwt from 'jsonwebtoken';
 import { config, getJwtSecret } from '../config';
 import { query } from '../db';
+import { AppError } from '../errors';
 
 export interface AuthContext {
   userId: string;
@@ -47,7 +48,8 @@ export async function resolveAccessToken(token: string): Promise<AuthContext | n
     const row = result.rows[0];
     if (!row || row.status !== 'active' || row.tenant_status !== 'active' || row.session_revoked_at || new Date(row.session_expires_at) <= new Date()) return null;
     return { userId: row.user_id, tenantId: row.tenant_id, role: row.role, sessionId: decoded.sessionId };
-  } catch {
+  } catch (error) {
+    if (error instanceof AppError && error.code.startsWith('DATABASE_')) throw error;
     return null;
   }
 }
@@ -58,7 +60,13 @@ export async function requireAuth(req: express.Request, res: express.Response, n
     res.status(401).json({ success: false, message: '未提供认证令牌', code: 'AUTH_REQUIRED' });
     return;
   }
-  const auth = await resolveAccessToken(authHeader.slice(7));
+  let auth: AuthContext | null;
+  try {
+    auth = await resolveAccessToken(authHeader.slice(7));
+  } catch (error) {
+    next(error);
+    return;
+  }
   if (!auth) {
     res.status(401).json({ success: false, message: '认证令牌无效或已撤销', code: 'AUTH_INVALID' });
     return;

@@ -1,9 +1,6 @@
-import React from 'react';
-import { render, screen } from '@testing-library/react';
-import App from './App';
+import { BRAND, BUSINESS_THEME } from './config/brand';
 
-test('renders learn react link', () => {
-  render(<App />);
-  const linkElement = screen.getByText(/learn react/i);
-  expect(linkElement).toBeInTheDocument();
+test('exposes the production business brand configuration', () => {
+  expect(BRAND.name).toBe('星链云客系统');
+  expect(BUSINESS_THEME.primary).toBeTruthy();
 });

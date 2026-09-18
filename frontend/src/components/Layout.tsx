@@ -135,8 +135,7 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
   };
 
   const handleLogout = () => {
-    logout();
-    navigate('/login');
+    void logout().finally(() => navigate('/login', { replace: true }));
   };
 
   const userMenuItems = [

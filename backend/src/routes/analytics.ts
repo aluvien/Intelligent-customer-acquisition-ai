@@ -17,7 +17,7 @@ router.get('/dashboard', async (req, res, next) => {
          (SELECT COUNT(*) FROM leads WHERE tenant_id = $1 AND status = 'converted')::text AS converted,
          (SELECT AVG(EXTRACT(EPOCH FROM (outbound.created_at - inbound.created_at)))::text
             FROM messages inbound JOIN LATERAL (
-              SELECT created_at FROM messages m2 WHERE m2.conversation_id = inbound.conversation_id AND m2.direction = 'outbound' AND m2.created_at >= inbound.created_at ORDER BY m2.created_at LIMIT 1
+              SELECT created_at FROM messages m2 WHERE m2.conversation_id = inbound.conversation_id AND m2.direction = 'outbound' AND m2.delivery_status IN ('provider_accepted', 'delivered') AND m2.created_at >= inbound.created_at ORDER BY m2.created_at LIMIT 1
             ) outbound ON TRUE
            WHERE inbound.tenant_id = $1 AND inbound.direction = 'inbound') AS response_seconds`,
       [tenant],
@@ -52,7 +52,25 @@ router.get('/realtime', async (req, res, next) => {
 
 router.get('/channels', async (req, res, next) => {
   try {
-    const result = await query(`SELECT ca.id AS "channelId", ca.display_name AS "channelName", COUNT(DISTINCT c.id)::int AS conversations, COUNT(DISTINCT l.id)::int AS leads, CASE WHEN COUNT(DISTINCT c.id) = 0 THEN 0 ELSE ROUND(COUNT(DISTINCT l.id)::numeric / COUNT(DISTINCT c.id) * 100, 2) END AS "conversionRate" FROM channel_accounts ca LEFT JOIN conversations c ON c.channel_account_id = ca.id LEFT JOIN leads l ON l.channel_account_id = ca.id WHERE ca.tenant_id = $1 GROUP BY ca.id ORDER BY conversations DESC`, [tenantId(req)]);
+    const result = await query(`
+      SELECT * FROM (
+        SELECT ca.id AS "channelId", ca.display_name AS "channelName", COUNT(DISTINCT c.id)::int AS conversations, COUNT(DISTINCT l.id)::int AS leads,
+               CASE WHEN COUNT(DISTINCT c.id) = 0 THEN 0 ELSE ROUND(COUNT(DISTINCT l.id)::numeric / COUNT(DISTINCT c.id) * 100, 2) END AS "conversionRate"
+          FROM channel_accounts ca
+          LEFT JOIN conversations c ON c.channel_account_id = ca.id AND c.tenant_id = ca.tenant_id
+          LEFT JOIN leads l ON l.channel_account_id = ca.id AND l.tenant_id = ca.tenant_id
+         WHERE ca.tenant_id = $1
+         GROUP BY ca.id
+        UNION ALL
+        SELECT 'widget:' || w.id AS "channelId", w.name AS "channelName", COUNT(DISTINCT c.id)::int AS conversations, COUNT(DISTINCT l.id)::int AS leads,
+               CASE WHEN COUNT(DISTINCT c.id) = 0 THEN 0 ELSE ROUND(COUNT(DISTINCT l.id)::numeric / COUNT(DISTINCT c.id) * 100, 2) END AS "conversionRate"
+          FROM widgets w
+          LEFT JOIN conversations c ON c.widget_id = w.id AND c.tenant_id = w.tenant_id
+          LEFT JOIN leads l ON l.conversation_id = c.id AND l.tenant_id = w.tenant_id
+         WHERE w.tenant_id = $1
+         GROUP BY w.id, w.name
+      ) channels
+      ORDER BY conversations DESC`, [tenantId(req)]);
     res.json({ success: true, message: '获取渠道统计成功', data: { channels: result.rows } });
   } catch (error) { next(error); }
 });
@@ -67,7 +85,22 @@ router.get('/trends', async (req, res, next) => {
 
 router.get('/performance', async (req, res, next) => {
   try {
-    const result = await query(`SELECT u.id AS "agentId", u.username AS agent, COUNT(DISTINCT c.id)::int AS conversations, COUNT(l.id)::int AS leads FROM users u LEFT JOIN conversations c ON c.assigned_to = u.id AND c.tenant_id = u.tenant_id LEFT JOIN leads l ON l.assigned_to = u.id AND l.tenant_id = u.tenant_id WHERE u.tenant_id = $1 GROUP BY u.id ORDER BY conversations DESC`, [tenantId(req)]);
+    const result = await query(`
+      WITH conversation_totals AS (
+        SELECT assigned_to, COUNT(*)::int AS conversations
+          FROM conversations WHERE tenant_id = $1 AND assigned_to IS NOT NULL GROUP BY assigned_to
+      ), lead_totals AS (
+        SELECT assigned_to, COUNT(*)::int AS leads
+          FROM leads WHERE tenant_id = $1 AND assigned_to IS NOT NULL GROUP BY assigned_to
+      )
+      SELECT u.id AS "agentId", u.username AS agent,
+             COALESCE(ct.conversations, 0)::int AS conversations,
+             COALESCE(lt.leads, 0)::int AS leads
+        FROM users u
+        LEFT JOIN conversation_totals ct ON ct.assigned_to = u.id
+        LEFT JOIN lead_totals lt ON lt.assigned_to = u.id
+       WHERE u.tenant_id = $1
+       ORDER BY conversations DESC, leads DESC`, [tenantId(req)]);
     res.json({ success: true, message: '获取客服绩效成功', data: { performance: result.rows } });
   } catch (error) { next(error); }
 });

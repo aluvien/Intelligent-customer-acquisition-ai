@@ -32,7 +32,9 @@ jobs:
         working-directory: frontend
         run: |
           npm ci
+          CI=true npm test -- --watchAll=false
           npm run build
+          npm audit --omit=dev --audit-level=high
 
       - name: Go adapter checks
         uses: actions/setup-go@v5

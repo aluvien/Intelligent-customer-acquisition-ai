@@ -1,5 +1,7 @@
 # ngrok 使用指南
 
+> 历史资料：ngrok 只可用于经过授权的开发环境网络诊断。当前仓库不会因为 ngrok 而获得抖音接入能力，平台适配器仍返回 `PLATFORM_UNVERIFIED`；请以 `README.md` 和 `docs/rebuild/DOUYIN_CAPABILITY_MATRIX.md` 为准。
+
 ## ✅ 方案A 完全可行！
 
 主公，ngrok 是业界标准的测试方案，完全可以使用！

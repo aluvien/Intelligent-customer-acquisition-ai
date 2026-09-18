@@ -1,5 +1,10 @@
 import dotenv from 'dotenv';
-dotenv.config();
+import fs from 'fs';
+import path from 'path';
+
+const envFiles = [process.env.ENV_FILE, path.resolve(process.cwd(), '.env'), path.resolve(process.cwd(), '../.env')].filter(Boolean) as string[];
+const envFile = envFiles.find((candidate) => fs.existsSync(candidate));
+if (envFile) dotenv.config({ path: envFile });
 
 import express from 'express';
 import cors from 'cors';
@@ -21,27 +26,30 @@ import aiRoutes from './routes/ai';
 import systemRoutes from './routes/system';
 import widgetsRoutes from './routes/widgets';
 import publicChatRoutes from './routes/publicChat';
-import { attach } from './realtime/hub';
-import { checkRedis } from './realtime/tickets';
+import { attach, closeHub } from './realtime/hub';
+import { checkRedis, closeRealtimeRedis } from './realtime/tickets';
 import { startWorker, stopWorker } from './jobs/worker';
 
 assertProductionConfig();
 
 const app = express();
 app.disable('x-powered-by');
+app.set('trust proxy', config.trustProxyHops);
 
 app.use(helmet());
 const adminCors = cors({ origin: config.corsOrigin.split(',').map((origin) => origin.trim()), credentials: true });
 const publicCors = cors({ origin: true, credentials: false });
 app.use((req, res, next) => (req.path === '/api/public' || req.path.startsWith('/api/public/')) ? publicCors(req, res, next) : adminCors(req, res, next));
 app.use(compression());
-app.use(morgan(config.nodeEnv === 'production' ? 'combined' : 'dev'));
+app.use(morgan(config.nodeEnv === 'production' ? 'combined' : 'dev', { skip: (req) => req.path === '/ws' }));
 app.use(express.json({ limit: config.maxBodyBytes }));
 app.use(express.urlencoded({ extended: true, limit: config.maxBodyBytes }));
 
 const loginLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 20, skipSuccessfulRequests: true, standardHeaders: true, legacyHeaders: false, message: { success: false, message: '登录尝试过于频繁，请稍后再试' } });
-const apiLimiter = rateLimit({ windowMs: config.rateLimitWindowMs, max: config.rateLimitMaxRequests, standardHeaders: true, legacyHeaders: false, message: { success: false, message: '请求过于频繁，请稍后再试' } });
+const publicApiLimiter = rateLimit({ windowMs: config.rateLimitWindowMs, max: config.publicRateLimitMaxRequests, standardHeaders: true, legacyHeaders: false, message: { success: false, message: '访客请求过于频繁，请稍后再试' } });
+const apiLimiter = rateLimit({ windowMs: config.rateLimitWindowMs, max: config.rateLimitMaxRequests, standardHeaders: true, legacyHeaders: false, skip: (req) => req.originalUrl.startsWith('/api/public'), message: { success: false, message: '请求过于频繁，请稍后再试' } });
 app.use('/api/auth/login', loginLimiter);
+app.use('/api/public', publicApiLimiter);
 app.use('/api', apiLimiter);
 
 app.get('/health', (_req, res) => res.json({ success: true, message: '星链云客系统 API 服务运行中', data: { timestamp: new Date().toISOString(), version: process.env.APP_VERSION || 'development' } }));
@@ -80,10 +88,19 @@ const server = app.listen(config.port, '0.0.0.0', () => {
 
 attach(server);
 
+let shuttingDown = false;
 async function shutdown(signal: string): Promise<void> {
+  if (shuttingDown) return;
+  shuttingDown = true;
   console.log(`收到 ${signal}，开始优雅退出`);
-  stopWorker();
-  await new Promise<void>((resolve) => server.close(() => resolve()));
+  await stopWorker();
+  await closeHub();
+  await new Promise<void>((resolve) => {
+    const timeout = setTimeout(resolve, 10_000);
+    timeout.unref();
+    server.close(() => { clearTimeout(timeout); resolve(); });
+  });
+  await closeRealtimeRedis();
   await pool.end().catch(() => undefined);
 }
 

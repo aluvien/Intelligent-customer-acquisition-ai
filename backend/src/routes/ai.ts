@@ -5,6 +5,7 @@ import { AppError } from '../errors';
 import { insertJob } from '../jobs/worker';
 import { requireRole } from '../middleware/auth';
 import { requireText, tenantId } from './helpers';
+import { detectBlockedWords } from '../services/contentAudit';
 
 const router = express.Router();
 
@@ -28,6 +29,8 @@ router.patch('/knowledge/:id', requireRole('admin', 'operator'), async (req, res
   try {
     const title = typeof req.body?.title === 'string' ? req.body.title.trim() : undefined;
     const content = typeof req.body?.content === 'string' ? req.body.content.trim() : undefined;
+    if (title !== undefined && (!title || title.length > 200)) throw new AppError(400, 'INVALID_INPUT', '标题不能为空且长度不能超过200个字符');
+    if (content !== undefined && (!content || content.length > 50_000)) throw new AppError(400, 'INVALID_INPUT', '内容不能为空且长度不能超过50000个字符');
     if (!title && !content) throw new AppError(400, 'NO_CHANGES', '没有可更新字段');
     const result = await query(`UPDATE knowledge_documents SET title = COALESCE($1, title), content = COALESCE($2, content), version = version + 1, status = CASE WHEN status = 'published' THEN 'draft' ELSE status END, updated_at = NOW() WHERE id = $3 AND tenant_id = $4 RETURNING id, title, content, version, status, updated_at AS "updatedAt"`, [title || null, content || null, req.params.id, tenantId(req)]);
     if (!result.rowCount) throw new AppError(404, 'KNOWLEDGE_NOT_FOUND', '知识文档不存在');
@@ -72,7 +75,7 @@ router.post('/draft', requireRole('admin', 'operator'), async (req, res, next) =
 
 router.get('/runs/:id', async (req, res, next) => {
   try {
-    const result = await query(`SELECT id, conversation_id AS "conversationId", message_id AS "messageId", provider, status, draft, evidence, usage, error, trace_id AS "traceId", created_at AS "createdAt", completed_at AS "completedAt" FROM ai_runs WHERE id = $1 AND tenant_id = $2`, [req.params.id, tenantId(req)]);
+    const result = await query(`SELECT id, conversation_id AS "conversationId", message_id AS "messageId", provider, provider_request_id AS "providerRequestId", provider_conversation_id AS "providerConversationId", status, draft, evidence, usage, error, trace_id AS "traceId", created_at AS "createdAt", completed_at AS "completedAt" FROM ai_runs WHERE id = $1 AND tenant_id = $2`, [req.params.id, tenantId(req)]);
     if (!result.rowCount) throw new AppError(404, 'AI_RUN_NOT_FOUND', 'AI 任务不存在');
     res.json({ success: true, message: '获取 AI 任务成功', data: { run: result.rows[0] } });
   } catch (error) { next(error); }
@@ -93,8 +96,7 @@ router.get('/stats', async (req, res, next) => {
 router.post('/audit', async (req, res, next) => {
   try {
     const content = requireText(req.body?.content, '内容', 10_000);
-    const words = (process.env.CONTENT_BLOCK_WORDS || '').split(',').map((word) => word.trim()).filter(Boolean);
-    const detectedWords = words.filter((word) => content.includes(word));
+    const detectedWords = detectBlockedWords(content);
     res.json({ success: true, message: '内容审核完成', data: { isBlocked: detectedWords.length > 0, detectedWords, action: detectedWords.length > 0 ? 'block' : 'pass', confidence: null } });
   } catch (error) { next(error); }
 });

@@ -44,7 +44,7 @@ const ChatWidget: React.FC = () => {
 
   useEffect(() => {
     if (!session) return undefined;
-    const timer = window.setInterval(() => { void loadMessages(session).catch(() => undefined); }, 3000);
+    const timer = window.setInterval(() => { if (document.visibilityState === 'visible') void loadMessages(session).catch(() => undefined); }, 5000);
     return () => window.clearInterval(timer);
   }, [session, loadMessages]);
 

@@ -9,7 +9,12 @@ export const pool = new Pool({
   max: Number(process.env.DB_POOL_MAX || 10),
   idleTimeoutMillis: 30_000,
   connectionTimeoutMillis: 5_000,
-  ssl: process.env.DATABASE_SSL === 'true' ? { rejectUnauthorized: false } : undefined,
+  ssl: process.env.DATABASE_SSL === 'true'
+    ? { rejectUnauthorized: process.env.DATABASE_SSL_REJECT_UNAUTHORIZED !== 'false' }
+    : undefined,
+});
+pool.on('error', (error) => {
+  console.error('数据库连接池后台连接错误:', error instanceof Error ? error.message : error);
 });
 
 export function assertDatabaseConfigured(): void {
@@ -27,6 +32,9 @@ export async function query<T extends QueryResultRow = QueryResultRow>(
     return await pool.query<T>(text, values);
   } catch (error) {
     console.error('数据库操作失败:', error instanceof Error ? error.message : 'unknown error');
+    const code = error && typeof error === 'object' && 'code' in error ? String((error as { code?: unknown }).code || '') : '';
+    if (code === '23505') throw new AppError(409, 'DATABASE_CONSTRAINT', '数据已存在或请求重复', true, code);
+    if (code === '23503' || code === '23514' || code === '23502') throw new AppError(409, 'DATABASE_CONSTRAINT', '数据不满足业务约束', true, code);
     throw new AppError(503, 'DATABASE_UNAVAILABLE', '数据库暂时不可用');
   }
 }

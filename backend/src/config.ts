@@ -22,6 +22,16 @@ function positiveIntEnv(name: string, fallback: number, max = Number.MAX_SAFE_IN
   return value;
 }
 
+function nonNegativeIntEnv(name: string, fallback: number, max = Number.MAX_SAFE_INTEGER): number {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 0 || value > max) {
+    throw new Error(`${name} 必须是有效的非负整数`);
+  }
+  return value;
+}
+
 function sameSiteEnv(): 'lax' | 'strict' | 'none' {
   const value = optional('COOKIE_SAME_SITE', 'lax').toLowerCase();
   if (!['lax', 'strict', 'none'].includes(value)) throw new Error('COOKIE_SAME_SITE 必须是 lax、strict 或 none');
@@ -45,6 +55,9 @@ export const config = {
   maxBodyBytes: positiveIntEnv('MAX_BODY_BYTES', 10, 100) * 1024 * 1024,
   rateLimitWindowMs: positiveIntEnv('RATE_LIMIT_WINDOW_MS', 900_000, 86_400_000),
   rateLimitMaxRequests: positiveIntEnv('RATE_LIMIT_MAX_REQUESTS', 100, 100_000),
+  publicRateLimitMaxRequests: positiveIntEnv('PUBLIC_RATE_LIMIT_MAX_REQUESTS', 400, 100_000),
+  aiMaxRunsPerConversationHour: positiveIntEnv('AI_MAX_RUNS_PER_CONVERSATION_HOUR', 20, 1_000),
+  trustProxyHops: nonNegativeIntEnv('TRUST_PROXY_HOPS', 0, 10),
   jwtSecretEntropy: process.env.JWT_SECRET?.length || 0,
 };
 
@@ -76,6 +89,11 @@ export function assertProductionConfig(): void {
   }
   if (!config.cookieSecure) throw new Error('生产环境必须启用 COOKIE_SECURE=true');
   if (config.corsOrigin.split(',').some((origin) => origin.trim() === '*')) throw new Error('生产环境禁止使用 CORS_ORIGIN=*');
+  try {
+    getEncryptionKey();
+  } catch (error) {
+    throw new Error(`ENCRYPTION_KEY 配置无效: ${error instanceof Error ? error.message : 'unknown error'}`);
+  }
 }
 
 export function randomId(): string {

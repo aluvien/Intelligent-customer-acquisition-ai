@@ -2,6 +2,12 @@ import axios, { AxiosInstance, AxiosResponse } from 'axios';
 import { message } from 'antd';
 import { ApiResponse } from '../types';
 
+declare module 'axios' {
+  interface AxiosRequestConfig {
+    skipAuthRefresh?: boolean;
+  }
+}
+
 // 前后端路径统一以 /api 为前缀（后端挂载在 app.use('/api', ...)）
 // 开发环境经 CRA proxy 转发到 http://localhost:3001，/api/* 同样会被转发
 const API_PREFIX = process.env.REACT_APP_API_URL || '/api';
@@ -15,6 +21,24 @@ const api: AxiosInstance = axios.create({
 });
 
 let refreshPromise: Promise<string> | null = null;
+let authGeneration = 0;
+let loggingOut = false;
+
+export function beginLogout(): void {
+  loggingOut = true;
+  authGeneration += 1;
+  refreshPromise = null;
+}
+
+export function endLogout(): void {
+  loggingOut = false;
+}
+
+export function clearStoredAuth(): void {
+  localStorage.removeItem('token');
+  localStorage.removeItem('user');
+  localStorage.removeItem('tenantId');
+}
 
 api.interceptors.request.use(
   (config) => {
@@ -49,12 +73,14 @@ api.interceptors.response.use(
       const isAuthPage = reqUrl.includes('/auth/login') || reqUrl.includes('/auth/register') || reqUrl.includes('/auth/refresh') || reqUrl.includes('/public/');
       switch (status) {
         case 401:
-          if (isAuthPage) {
+          if (isAuthPage || (error.config as any)?.skipAuthRefresh || loggingOut) {
             break;
           }
           if (!(error.config as any)?._retry) {
             (error.config as any)._retry = true;
-            refreshPromise ||= api.post('/auth/refresh').then((response) => {
+            const generation = authGeneration;
+            refreshPromise ||= api.post('/auth/refresh', undefined, { skipAuthRefresh: true }).then((response) => {
+              if (loggingOut || generation !== authGeneration) throw new Error('登录状态正在退出');
               const nextToken = response.data.data.token as string;
               localStorage.setItem('token', nextToken);
               return nextToken;
@@ -68,8 +94,7 @@ api.interceptors.response.use(
             }
           }
           message.error('登录已过期，请重新登录');
-          localStorage.removeItem('token');
-          localStorage.removeItem('user');
+          clearStoredAuth();
           if (window.location.pathname !== '/login') {
             window.location.href = '/login';
           }
