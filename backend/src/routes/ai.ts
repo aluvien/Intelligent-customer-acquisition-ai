@@ -61,6 +61,7 @@ router.get('/runs', async (req, res, next) => {
            SELECT 1 FROM messages m
             WHERE m.tenant_id = r.tenant_id AND m.conversation_id = r.conversation_id
               AND m.direction = 'outbound'
+              AND m.delivery_status IN ('queued', 'sending', 'provider_accepted', 'delivered', 'unknown')
               AND (m.metadata->>'aiRunId' = r.id OR m.metadata->>'approvedAiRunId' = r.id)
          )
        ORDER BY r.created_at DESC LIMIT 100`, [tenantId(req), conversationId]);
@@ -86,8 +87,9 @@ router.post('/draft', requireRole('admin', 'operator'), async (req, res, next) =
       if (!conversation.rowCount) throw new AppError(404, 'CONVERSATION_NOT_FOUND', '对话不存在');
       const message = await client.query<{ id: string }>('SELECT id FROM messages WHERE id = $1 AND conversation_id = $2 AND tenant_id = $3 AND direction = \'inbound\'', [messageId, conversationId, tenant]);
       if (!message.rowCount) throw new AppError(404, 'MESSAGE_NOT_FOUND', 'AI 输入消息不存在或不属于该对话');
-      const existing = await client.query<{ id: string; status: string; provider_state: string; has_job: boolean }>(
+      const existing = await client.query<{ id: string; status: string; provider_state: string; knowledge_snapshot_state: string; has_job: boolean }>(
         `SELECT r.id, r.status, r.provider_state,
+                r.knowledge_snapshot_state,
                 EXISTS (
                   SELECT 1 FROM jobs j
                    WHERE j.tenant_id = r.tenant_id AND j.type = 'ai_draft'
@@ -105,6 +107,7 @@ router.post('/draft', requireRole('admin', 'operator'), async (req, res, next) =
         [tenant, conversationId, messageId],
       );
       if (existing.rows[0]) {
+        if (existing.rows[0].knowledge_snapshot_state === 'unknown') throw new AppError(409, 'AI_KNOWLEDGE_SNAPSHOT_UNAVAILABLE', '该 AI 任务缺少可验证的历史知识依据，不能自动恢复');
         if (['creating', 'unknown'].includes(existing.rows[0].provider_state)) throw new AppError(409, 'AI_PROVIDER_CREATION_UNKNOWN', '已有 AI 任务的 Coze 创建结果需要人工对账，不能自动重复发起');
         if (existing.rows[0].status !== 'failed') return { aiRunId: existing.rows[0].id, status: existing.rows[0].status, duplicate: true };
         if (!existing.rows[0].has_job) {

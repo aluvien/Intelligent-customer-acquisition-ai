@@ -132,7 +132,7 @@ async function complete(job: Job): Promise<void> {
 
 async function fail(job: Job, error: unknown): Promise<void> {
   const message = error instanceof Error ? error.message.slice(0, 1000) : '任务失败';
-  const deterministicBlocked = job.type === 'ai_draft' && error instanceof AppError && ['AI_NOT_CONFIGURED', 'AI_PROVIDER_UNSUPPORTED', 'AI_KNOWLEDGE_REQUIRED', 'AI_KNOWLEDGE_SNAPSHOT_INVALID', 'AI_PROVIDER_CREATION_UNKNOWN', 'CONTENT_BLOCKED'].includes(error.code);
+  const deterministicBlocked = job.type === 'ai_draft' && error instanceof AppError && ['AI_NOT_CONFIGURED', 'AI_PROVIDER_UNSUPPORTED', 'AI_KNOWLEDGE_REQUIRED', 'AI_KNOWLEDGE_SNAPSHOT_INVALID', 'AI_KNOWLEDGE_SNAPSHOT_UNAVAILABLE', 'AI_PROVIDER_CREATION_UNKNOWN', 'CONTENT_BLOCKED'].includes(error.code);
   const terminal = job.attempts >= job.max_attempts || deterministicBlocked;
   const delaySeconds = Math.min(300, 2 ** Math.max(0, job.attempts - 1) * 5);
   await withTransaction(async (client) => {

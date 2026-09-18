@@ -160,14 +160,37 @@ router.post('/:id/drafts/:aiRunId/approve', requireRole('admin', 'operator'), as
     const result = await withTransaction(async (client) => {
       const run = await client.query<{ draft: string | null; status: string }>(`SELECT draft, status FROM ai_runs WHERE id = $1 AND tenant_id = $2 AND conversation_id = $3 FOR UPDATE`, [req.params.aiRunId, tenant, req.params.id]);
       if (!run.rows[0] || run.rows[0].status !== 'succeeded' || !(content || run.rows[0].draft)) throw new AppError(409, 'DRAFT_NOT_READY', 'AI 草稿尚未准备好或已失效');
+      const externalMessageId = `ai-approval:${req.params.aiRunId}`;
+      const text = content || run.rows[0].draft!;
+      const existing = await client.query<{ id: string; content: string; delivery_status: string; external_message_id: string | null }>(`SELECT id, content, delivery_status, external_message_id FROM messages WHERE tenant_id = $1 AND conversation_id = $2 AND (external_message_id = $3 OR metadata->>'aiRunId' = $4 OR metadata->>'approvedAiRunId' = $4) FOR UPDATE`, [tenant, req.params.id, externalMessageId, req.params.aiRunId]);
+      // Lock messages before the conversation, matching the worker's
+      // message -> conversation order and avoiding approval/delivery deadlocks.
       const conversation = await client.query<{ status: string; mode: string; widget_id: string | null }>('SELECT status, mode, widget_id FROM conversations WHERE id = $1 AND tenant_id = $2 FOR UPDATE', [req.params.id, tenant]);
       if (!conversation.rows[0] || conversation.rows[0].status === 'closed') throw new AppError(409, 'CONVERSATION_CLOSED', '对话已关闭');
-      const externalMessageId = `ai-approval:${req.params.aiRunId}`;
-      const existing = await client.query<{ id: string; content: string; delivery_status: string }>(`SELECT id, content, delivery_status FROM messages WHERE tenant_id = $1 AND conversation_id = $2 AND (external_message_id = $3 OR metadata->>'aiRunId' = $4 OR metadata->>'approvedAiRunId' = $4)`, [tenant, req.params.id, externalMessageId, req.params.aiRunId]);
-      const text = content || run.rows[0].draft!;
-      if (existing.rows[0]) {
-        if (existing.rows[0].content !== text) throw new AppError(409, 'DRAFT_ALREADY_PUBLISHED', '该 AI 草稿已经发布了不同内容');
-        return { messageId: existing.rows[0].id, text: existing.rows[0].content, deliveryStatus: existing.rows[0].delivery_status, duplicate: true };
+      // An auto-publish transaction can insert the related message while the
+      // conversation lock is being acquired. Re-read after that lock so the
+      // unique index is not used as the normal concurrency response path.
+      const currentExisting = await client.query<{ id: string; content: string; delivery_status: string; external_message_id: string | null }>(`SELECT id, content, delivery_status, external_message_id FROM messages WHERE tenant_id = $1 AND conversation_id = $2 AND (external_message_id = $3 OR metadata->>'aiRunId' = $4 OR metadata->>'approvedAiRunId' = $4) FOR UPDATE`, [tenant, req.params.id, externalMessageId, req.params.aiRunId]);
+      const existingRow = [...existing.rows, ...currentExisting.rows].find((item) => item.external_message_id === externalMessageId) || currentExisting.rows[0] || existing.rows[0];
+      if (existingRow) {
+        const recoverable = ['cancelled', 'failed'].includes(existingRow.delivery_status);
+        if (!recoverable && existingRow.content !== text) throw new AppError(409, 'DRAFT_ALREADY_PUBLISHED', '该 AI 草稿已经发布了不同内容');
+        if (existingRow.delivery_status === 'unknown') throw new AppError(409, 'DRAFT_RECONCILIATION_REQUIRED', '该 AI 草稿的上一轮投递结果未知，请先完成对账');
+        if (recoverable) {
+          await client.query(
+            `UPDATE messages
+                SET external_message_id = $2, sender_type = 'human', content = $3,
+                    delivery_status = 'queued',
+                    metadata = jsonb_build_object('approvedAiRunId', $4, 'userId', $5, 'idempotencyKey', $6)
+              WHERE id = $1 AND tenant_id = $7 AND conversation_id = $8
+                AND delivery_status IN ('cancelled', 'failed')`,
+            [existingRow.id, externalMessageId, text, req.params.aiRunId, req.auth!.userId, idempotencyKey, tenant, req.params.id],
+          );
+          await client.query(`UPDATE conversations SET last_message_at = NOW(), updated_at = NOW() WHERE id = $1 AND tenant_id = $2`, [req.params.id, tenant]);
+          await insertJob(client, tenant, conversation.rows[0].widget_id ? 'web_delivery' : 'platform_delivery', { conversationId: req.params.id, messageId: existingRow.id }, conversation.rows[0].widget_id ? 3 : 1);
+          return { messageId: existingRow.id, text, deliveryStatus: 'queued', duplicate: false };
+        }
+        return { messageId: existingRow.id, text: existingRow.content, deliveryStatus: existingRow.delivery_status, duplicate: true };
       }
       const messageId = randomId();
       await client.query(`INSERT INTO messages(id, tenant_id, conversation_id, external_message_id, direction, sender_type, message_type, content, delivery_status, metadata) VALUES ($1, $2, $3, $4, 'outbound', 'human', 'web_message', $5, 'queued', $6::jsonb)`, [messageId, tenant, req.params.id, externalMessageId, text, JSON.stringify({ approvedAiRunId: req.params.aiRunId, userId: req.auth!.userId, idempotencyKey })]);

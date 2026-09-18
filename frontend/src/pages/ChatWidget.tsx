@@ -21,6 +21,9 @@ const ChatWidget: React.FC = () => {
   const [leadForm] = Form.useForm();
   const pendingMessageKey = useRef<{ key: string; content: string } | null>(null);
   const inputRevision = useRef(0);
+  const sessionRef = useRef<Session | null>(null);
+  const sessionGeneration = useRef(0);
+  const sessionRecovery = useRef<Promise<Session> | null>(null);
 
   const createSession = useCallback(async (): Promise<Session> => {
     if (!widgetId) throw new Error('访客入口不存在');
@@ -30,7 +33,9 @@ const ChatWidget: React.FC = () => {
   }, [widgetId]);
 
   const loadMessages = useCallback(async (current: Session, before?: string, replace = false) => {
+    const requestGeneration = sessionGeneration.current;
     const response = await api.get(`/public/sessions/${current.sessionId}/messages`, { params: before ? { before } : undefined, headers: { 'X-Visitor-Token': current.token } });
+    if (sessionGeneration.current !== requestGeneration || sessionRef.current?.sessionId !== current.sessionId) return;
     const nextMessages: ChatMessage[] = response.data.data.messages || [];
     if (before) {
       setMessages((items) => {
@@ -52,6 +57,31 @@ const ChatWidget: React.FC = () => {
     setHistoryCursor((currentValue) => before || replace || !currentValue ? nextCursor : currentValue || nextCursor);
   }, []);
 
+  const recoverSession = useCallback(async (): Promise<Session> => {
+    if (!widgetId) throw new Error('访客入口不存在');
+    if (sessionRecovery.current) return sessionRecovery.current;
+    const key = `visitor-session:${widgetId}`;
+    const recovery = (async () => {
+      sessionStorage.removeItem(key);
+      const replacement = await createSession();
+      sessionStorage.setItem(key, JSON.stringify(replacement));
+      sessionGeneration.current += 1;
+      sessionRef.current = replacement;
+      setSession(replacement);
+      setMessages([]);
+      setHistoryCursor(null);
+      setHistoryHasMore(false);
+      await loadMessages(replacement, undefined, true);
+      return replacement;
+    })();
+    sessionRecovery.current = recovery;
+    try {
+      return await recovery;
+    } finally {
+      if (sessionRecovery.current === recovery) sessionRecovery.current = null;
+    }
+  }, [widgetId, createSession, loadMessages]);
+
   useEffect(() => {
     let active = true;
     const init = async () => {
@@ -72,22 +102,21 @@ const ChatWidget: React.FC = () => {
           sessionStorage.setItem(key, JSON.stringify(current));
         }
         if (!active) return;
+        sessionGeneration.current += 1;
+        sessionRef.current = current;
         setSession(current);
         try {
           await loadMessages(current, undefined, true);
         } catch (err: any) {
           if (err?.response?.status !== 401) throw err;
-          sessionStorage.removeItem(key);
-          const replacement = await createSession();
-          sessionStorage.setItem(key, JSON.stringify(replacement));
-          if (active) { setMessages([]); setHistoryCursor(null); setHistoryHasMore(false); setSession(replacement); await loadMessages(replacement, undefined, true); }
+          if (active) await recoverSession();
         }
       } catch (err: any) { if (active) setError(err?.response?.data?.message || '访客入口暂不可用'); }
       finally { if (active) setLoading(false); }
     };
     void init();
     return () => { active = false; };
-  }, [widgetId, createSession, loadMessages]);
+  }, [widgetId, createSession, loadMessages, recoverSession]);
 
   useEffect(() => {
     if (!session) return undefined;
@@ -95,21 +124,13 @@ const ChatWidget: React.FC = () => {
       if (document.visibilityState !== 'visible') return;
       void loadMessages(session).catch(async (err: any) => {
         if (err?.response?.status !== 401 || !widgetId) return;
-        const key = `visitor-session:${widgetId}`;
         try {
-          sessionStorage.removeItem(key);
-          const replacement = await createSession();
-          sessionStorage.setItem(key, JSON.stringify(replacement));
-          setSession(replacement);
-          setMessages([]);
-          setHistoryCursor(null);
-          setHistoryHasMore(false);
-          await loadMessages(replacement, undefined, true);
+          await recoverSession();
         } catch { /* The next poll or a user action will surface the error. */ }
       });
     }, 5000);
     return () => window.clearInterval(timer);
-  }, [session, widgetId, createSession, loadMessages]);
+  }, [session, widgetId, recoverSession, loadMessages]);
 
   const loadOlder = async () => {
     if (!session || !historyCursor || loadingOlder) return;

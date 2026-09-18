@@ -50,6 +50,7 @@ const ActiveConversations: React.FC = () => {
   const conversationIds = useRef<Set<string>>(new Set());
   const pendingMessageKey = useRef<{ key: string; content: string } | null>(null);
   const selectedConversationId = useRef<string | null>(null);
+  const selectedConversationRef = useRef<Conversation | null>(null);
   const inputRevision = useRef(0);
   const messageRequestId = useRef(0);
 
@@ -74,14 +75,15 @@ const ActiveConversations: React.FC = () => {
       pendingMessageKey.current = null;
       messageIds.current = new Set();
       selectedConversationId.current = conversation.id;
+      selectedConversationRef.current = conversation;
       setSelected(conversation);
       setDetailLoading(true);
     }
     try {
       const response = await api.get(`/conversations/${conversation.id}/messages`, { params: before ? { before } : undefined });
       const nextMessages: ConversationMessage[] = response.data.data.messages || [];
-      nextMessages.forEach((item) => messageIds.current.add(item.id));
       if (requestId === messageRequestId.current) {
+        nextMessages.forEach((item) => messageIds.current.add(item.id));
         if (before) {
           setMessages((items) => {
             const merged = new Map(items.map((item) => [item.id, item]));
@@ -157,7 +159,7 @@ const ActiveConversations: React.FC = () => {
         } else {
           void loadConversations();
         }
-        if (selected?.id === incoming.conversationId) {
+        if (selectedConversationId.current === incoming.conversationId) {
           setMessages((items) => items.some((item) => item.id === incoming.id)
             ? items.map((item) => item.id === incoming.id ? { ...item, ...incoming } : item)
             : [...items, incoming]);
@@ -165,7 +167,7 @@ const ActiveConversations: React.FC = () => {
       },
     });
     return disconnect;
-  }, [selected?.id, loadConversations]);
+  }, [loadConversations]);
 
   const counts = useMemo(() => ({
     active: conversations.filter((item) => item.status === 'active').length,
@@ -193,11 +195,12 @@ const ActiveConversations: React.FC = () => {
   };
 
   const approveDraft = async (draft: AiDraft) => {
+    const conversationId = draft.conversationId;
     try {
       const response = await api.post(`/conversations/${draft.conversationId}/drafts/${draft.aiRunId}/approve`, { content: draft.draft }, { headers: { 'Idempotency-Key': `approve-${draft.aiRunId}` } });
       message.success(response.data.message || '草稿已批准');
       setDrafts((items) => { const next = { ...items }; delete next[draft.aiRunId]; return next; });
-      if (selected) await loadMessages(selected);
+      if (selectedConversationId.current === conversationId && selectedConversationRef.current) await loadMessages(selectedConversationRef.current);
     } catch (err: any) {
       message.error(err?.response?.data?.message || '草稿批准失败');
     }
@@ -209,7 +212,12 @@ const ActiveConversations: React.FC = () => {
       await api.put(`/conversations/${selected.id}/close`);
       message.success('对话已关闭');
       await loadConversations();
-      setSelected((item) => item ? { ...item, status: 'closed' } : item);
+      setSelected((item) => {
+        if (!item) return item;
+        const closed = { ...item, status: 'closed' };
+        selectedConversationRef.current = closed;
+        return closed;
+      });
     } catch (err: any) {
       message.error(err?.response?.data?.message || '关闭对话失败');
     }

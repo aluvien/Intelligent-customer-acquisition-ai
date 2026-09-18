@@ -27,7 +27,7 @@ import systemRoutes from './routes/system';
 import widgetsRoutes from './routes/widgets';
 import publicChatRoutes from './routes/publicChat';
 import { attach, closeHub } from './realtime/hub';
-import { checkRedis, closeRealtimeRedis } from './realtime/tickets';
+import { checkRedis, closeRealtimeRedis, isRealtimeSubscriberReady } from './realtime/tickets';
 import { startWorker, stopWorker } from './jobs/worker';
 
 assertProductionConfig();
@@ -55,8 +55,9 @@ app.use('/api', apiLimiter);
 app.get('/health', (_req, res) => res.json({ success: true, message: '星链云客系统 API 服务运行中', data: { timestamp: new Date().toISOString(), version: process.env.APP_VERSION || 'development' } }));
 app.get('/readyz', async (_req, res) => {
   const [database, redis] = await Promise.all([checkDatabase(), config.redisUrl ? checkRedis() : Promise.resolve(false)]);
-  const ready = database && (!config.redisUrl || redis);
-  res.status(ready ? 200 : 503).json({ success: ready, message: ready ? '服务已就绪' : '服务依赖未就绪', data: { database: database ? 'ready' : 'unavailable', redis: config.redisUrl ? (redis ? 'ready' : 'unavailable') : 'not-configured' } });
+  const subscriber = isRealtimeSubscriberReady();
+  const ready = database && (!config.redisUrl || (redis && subscriber));
+  res.status(ready ? 200 : 503).json({ success: ready, message: ready ? '服务已就绪' : '服务依赖未就绪', data: { database: database ? 'ready' : 'unavailable', redis: config.redisUrl ? (redis ? 'ready' : 'unavailable') : 'not-configured', realtimeSubscriber: config.redisUrl ? (subscriber ? 'ready' : 'unavailable') : 'not-configured' } });
 });
 app.get('/api', (_req, res) => res.json({ success: true, message: '星链云客系统 API', data: { version: process.env.APP_VERSION || 'development', endpoints: ['/api/auth', '/api/conversations', '/api/leads', '/api/ai', '/api/analytics', '/api/channels', '/api/widgets', '/api/public'] } }));
 

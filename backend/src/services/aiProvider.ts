@@ -1,5 +1,5 @@
 import axios, { AxiosResponse } from 'axios';
-import { query } from '../db';
+import { assertDatabaseConfigured, pool, query } from '../db';
 import { AppError } from '../errors';
 
 type KnowledgeDocument = { id: string; title: string; content: string; version: number };
@@ -37,24 +37,37 @@ function parseKnowledgeSnapshot(value: unknown): KnowledgeDocument[] | undefined
 }
 
 async function loadKnowledgeForRun(tenantId: string, aiRunId: string): Promise<KnowledgeDocument[]> {
-  const run = await query<{ knowledge_snapshot: unknown }>('SELECT knowledge_snapshot FROM ai_runs WHERE id = $1 AND tenant_id = $2', [aiRunId, tenantId]);
+  const run = await query<{ knowledge_snapshot: unknown; knowledge_snapshot_state: 'pending' | 'captured' | 'unknown' }>('SELECT knowledge_snapshot, knowledge_snapshot_state FROM ai_runs WHERE id = $1 AND tenant_id = $2', [aiRunId, tenantId]);
   if (!run.rows[0]) throw new AppError(404, 'AI_RUN_NOT_FOUND', 'AI 任务不存在');
+  if (run.rows[0].knowledge_snapshot_state === 'unknown') {
+    throw new AppError(409, 'AI_KNOWLEDGE_SNAPSHOT_UNAVAILABLE', '该 AI 任务缺少可验证的历史知识依据，不能自动恢复');
+  }
   const snapshot = parseKnowledgeSnapshot(run.rows[0].knowledge_snapshot);
-  if (snapshot && snapshot.length > 0) return snapshot;
+  if (run.rows[0].knowledge_snapshot_state === 'captured') {
+    if (!snapshot || snapshot.length === 0) throw new AppError(409, 'AI_KNOWLEDGE_SNAPSHOT_INVALID', 'AI 任务的知识快照无效，请重新创建任务');
+    return snapshot;
+  }
+  if (snapshot && snapshot.length > 0) {
+    await query(`UPDATE ai_runs SET knowledge_snapshot_state = 'captured' WHERE id = $1 AND tenant_id = $2 AND knowledge_snapshot_state = 'pending'`, [aiRunId, tenantId]);
+    return snapshot;
+  }
   const current = await loadKnowledge(tenantId);
   if (current.length === 0) throw new AppError(409, 'AI_KNOWLEDGE_REQUIRED', '请先发布企业知识，再生成 AI 草稿');
   // Persist before the provider request. A retry therefore uses the exact
   // documents and versions selected by the original attempt, even if the
   // published knowledge changes while the provider is processing.
   const persisted = await query<{ knowledge_snapshot: unknown }>(
-    `UPDATE ai_runs SET knowledge_snapshot = $1::jsonb
-       WHERE id = $2 AND tenant_id = $3 AND knowledge_snapshot = '[]'::jsonb
+    `UPDATE ai_runs SET knowledge_snapshot = $1::jsonb, knowledge_snapshot_state = 'captured'
+       WHERE id = $2 AND tenant_id = $3 AND knowledge_snapshot_state = 'pending' AND knowledge_snapshot = '[]'::jsonb
      RETURNING knowledge_snapshot`,
     [JSON.stringify(current), aiRunId, tenantId],
   );
   if (persisted.rows[0]) return parseKnowledgeSnapshot(persisted.rows[0].knowledge_snapshot) || current;
-  const latest = await query<{ knowledge_snapshot: unknown }>('SELECT knowledge_snapshot FROM ai_runs WHERE id = $1 AND tenant_id = $2', [aiRunId, tenantId]);
-  return parseKnowledgeSnapshot(latest.rows[0]?.knowledge_snapshot) || current;
+  const latest = await query<{ knowledge_snapshot: unknown; knowledge_snapshot_state: 'pending' | 'captured' | 'unknown' }>('SELECT knowledge_snapshot, knowledge_snapshot_state FROM ai_runs WHERE id = $1 AND tenant_id = $2', [aiRunId, tenantId]);
+  if (latest.rows[0]?.knowledge_snapshot_state === 'unknown') throw new AppError(409, 'AI_KNOWLEDGE_SNAPSHOT_UNAVAILABLE', '该 AI 任务缺少可验证的历史知识依据，不能自动恢复');
+  const latestSnapshot = parseKnowledgeSnapshot(latest.rows[0]?.knowledge_snapshot);
+  if (latestSnapshot && latestSnapshot.length > 0) return latestSnapshot;
+  return current;
 }
 
 function buildKnowledgeContext(knowledge: KnowledgeDocument[]): { context: string; used: KnowledgeDocument[] } {
@@ -90,6 +103,7 @@ function assertCozeResponse(response: AxiosResponse<unknown>, operation: string)
   const code = body.code;
   if (code !== undefined && String(code) !== '0') {
     const detail = stringField(body, 'msg', 'message').slice(0, 240);
+    if (String(code) === '4016') throw new AppError(503, 'AI_PROVIDER_CONVERSATION_BUSY', `Coze ${operation} 正在处理同一会话，请稍后重试`);
     throw new AppError(502, 'AI_PROVIDER_ERROR', `Coze ${operation} 失败${detail ? `：${detail}` : ''}`);
   }
   return body;
@@ -208,19 +222,34 @@ async function generateWithCoze(tenantId: string, question: string, conversation
     }
     const remaining = deadline - Date.now();
     if (remaining <= 0) throw new AppError(502, 'AI_PROVIDER_TIMEOUT', 'Coze 对话在规定时间内未完成');
-    const response = await axios.post(`${baseUrl}/chat`, {
-      bot_id: botId,
-      user_id: `conversation:${conversationId}`,
-      stream: false,
-      auto_save_history: true,
-      additional_messages: [{ role: 'user', type: 'question', content: prompt, content_type: 'text' }],
-    }, {
-      timeout: Math.min(20_000, remaining),
-      params: previousConversationId ? { conversation_id: previousConversationId } : undefined,
-      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-      validateStatus: () => true,
-    });
-    initialBody = assertCozeResponse(response, '发起对话');
+    try {
+      const response = await axios.post(`${baseUrl}/chat`, {
+        bot_id: botId,
+        user_id: `conversation:${conversationId}`,
+        stream: false,
+        auto_save_history: true,
+        additional_messages: [{ role: 'user', type: 'question', content: prompt, content_type: 'text' }],
+      }, {
+        timeout: Math.min(20_000, remaining),
+        params: previousConversationId ? { conversation_id: previousConversationId } : undefined,
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        validateStatus: () => true,
+      });
+      initialBody = assertCozeResponse(response, '发起对话');
+    } catch (error) {
+      // Coze 4016 means this request was rejected because the conversation is
+      // already busy; unlike a timeout, the provider did not create a new
+      // chat, so the creating intent is safe to retry.
+      if (error instanceof AppError && error.code === 'AI_PROVIDER_CONVERSATION_BUSY' && aiRunId) {
+        await query(
+          `UPDATE ai_runs SET provider_state = 'new'
+             WHERE id = $1 AND tenant_id = $2 AND provider_state = 'creating'
+               AND provider_request_id IS NULL AND provider_conversation_id IS NULL`,
+          [aiRunId, tenantId],
+        );
+      }
+      throw error;
+    }
     const initialMeta = extractChatMeta(initialBody);
     meta = {
       conversationId: initialMeta.conversationId || meta.conversationId,
@@ -279,10 +308,25 @@ async function generateWithCoze(tenantId: string, question: string, conversation
   };
 }
 
+async function withProviderConversationLock<T>(tenantId: string, conversationId: string, fn: () => Promise<T>): Promise<T> {
+  assertDatabaseConfigured();
+  const client = await pool.connect().catch(() => {
+    throw new AppError(503, 'DATABASE_UNAVAILABLE', '数据库暂时不可用');
+  });
+  const lockKey = `coze:${tenantId}:${conversationId}`;
+  try {
+    await client.query('SELECT pg_advisory_lock(hashtext($1))', [lockKey]);
+    return await fn();
+  } finally {
+    await client.query('SELECT pg_advisory_unlock(hashtext($1))', [lockKey]).catch(() => undefined);
+    client.release();
+  }
+}
+
 export async function generateDraft(tenantId: string, conversationId: string, question: string, aiRunId?: string): Promise<DraftResult> {
   const knowledge = aiRunId ? await loadKnowledgeForRun(tenantId, aiRunId) : await loadKnowledge(tenantId);
   if (knowledge.length === 0) throw new AppError(409, 'AI_KNOWLEDGE_REQUIRED', '请先发布企业知识，再生成 AI 草稿');
   const provider = (process.env.AI_PROVIDER || 'coze').trim().toLowerCase();
   if (provider !== 'coze') throw new AppError(503, 'AI_PROVIDER_UNSUPPORTED', '当前只实现已配置的 Coze 供应商');
-  return generateWithCoze(tenantId, question, conversationId, knowledge, aiRunId);
+  return withProviderConversationLock(tenantId, conversationId, () => generateWithCoze(tenantId, question, conversationId, knowledge, aiRunId));
 }

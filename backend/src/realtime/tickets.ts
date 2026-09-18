@@ -11,6 +11,11 @@ export interface RealtimeIdentity {
 
 let redis: Redis | null = null;
 let realtimeSubscriber: Redis | null = null;
+let subscriberStartPromise: Promise<void> | null = null;
+let subscriberRetryTimer: NodeJS.Timeout | undefined;
+let subscriberRetryDelay = 1_000;
+let subscriberHandler: ((envelope: RealtimeEnvelope) => void) | null = null;
+let subscriberClosed = false;
 const localTickets = new Map<string, { identity: RealtimeIdentity; expiresAt: number }>();
 const REALTIME_CHANNEL = 'xinglian:realtime:broadcast';
 
@@ -100,7 +105,85 @@ export async function isRealtimeIdentityActive(identity: RealtimeIdentity): Prom
   }
 }
 
+function scheduleSubscriberRetry(): void {
+  if (subscriberClosed || subscriberRetryTimer || realtimeSubscriber || !subscriberHandler || !config.redisUrl) return;
+  const delay = subscriberRetryDelay;
+  subscriberRetryDelay = Math.min(30_000, subscriberRetryDelay * 2);
+  subscriberRetryTimer = setTimeout(() => {
+    subscriberRetryTimer = undefined;
+    void openRealtimeSubscriber();
+  }, delay);
+  subscriberRetryTimer.unref();
+}
+
+async function openRealtimeSubscriber(): Promise<void> {
+  if (subscriberClosed || realtimeSubscriber || subscriberStartPromise || !subscriberHandler || !config.redisUrl) return;
+  const handler = subscriberHandler;
+  let subscriber: Redis | undefined;
+  const attempt = (async () => {
+    const client = getRedis();
+    if (!client) return;
+    if (client.status !== 'ready') await client.connect().catch(() => undefined);
+    if (client.status !== 'ready') throw new Error('Redis 尚未就绪');
+    subscriber = client.duplicate();
+    subscriber.on('error', (error) => {
+      console.error('Redis 实时订阅错误:', error.message);
+      if (realtimeSubscriber === subscriber) {
+        realtimeSubscriber = null;
+        scheduleSubscriberRetry();
+      }
+    });
+    subscriber.on('end', () => {
+      if (realtimeSubscriber === subscriber) {
+        realtimeSubscriber = null;
+        scheduleSubscriberRetry();
+      }
+    });
+    try {
+      await subscriber.connect();
+      if (subscriber.status !== 'ready') throw new Error('Redis 实时订阅连接未就绪');
+      await subscriber.subscribe(REALTIME_CHANNEL);
+      if (subscriberClosed || subscriberHandler !== handler) {
+        await subscriber.quit().catch(() => subscriber?.disconnect());
+        return;
+      }
+      realtimeSubscriber = subscriber;
+      subscriberRetryDelay = 1_000;
+    } catch (error) {
+      await subscriber.quit().catch(() => subscriber?.disconnect());
+      throw error;
+    }
+    subscriber.on('message', (_channel, raw) => {
+      try {
+        const envelope = JSON.parse(raw) as RealtimeEnvelope;
+        if (envelope && typeof envelope.origin === 'string' && typeof envelope.tenantId === 'string') handler(envelope);
+      } catch {
+        // Ignore malformed cross-instance notifications.
+      }
+    });
+  })();
+  subscriberStartPromise = attempt;
+  try {
+    await attempt;
+  } catch (error) {
+    console.error('Redis 实时订阅初始化失败:', error instanceof Error ? error.message : error);
+    scheduleSubscriberRetry();
+  } finally {
+    if (subscriberStartPromise === attempt) subscriberStartPromise = null;
+  }
+}
+
+export function isRealtimeSubscriberReady(): boolean {
+  return !config.redisUrl || Boolean(realtimeSubscriber);
+}
+
 export async function closeRealtimeRedis(): Promise<void> {
+  subscriberClosed = true;
+  subscriberHandler = null;
+  if (subscriberRetryTimer) clearTimeout(subscriberRetryTimer);
+  subscriberRetryTimer = undefined;
+  await subscriberStartPromise?.catch(() => undefined);
+  subscriberStartPromise = null;
   localTickets.clear();
   if (realtimeSubscriber) {
     const subscriber = realtimeSubscriber;
@@ -116,27 +199,9 @@ export async function closeRealtimeRedis(): Promise<void> {
 export type RealtimeEnvelope = { origin: string; tenantId: string; payload: unknown };
 
 export async function startRealtimeSubscriber(onMessage: (envelope: RealtimeEnvelope) => void): Promise<void> {
-  const client = getRedis();
-  if (!client || realtimeSubscriber) return;
-  try {
-    await client.connect().catch(() => undefined);
-    if (client.status !== 'ready') return;
-    const subscriber = client.duplicate();
-    subscriber.on('error', (error) => console.error('Redis 实时订阅错误:', error.message));
-    await subscriber.connect();
-    await subscriber.subscribe(REALTIME_CHANNEL);
-    subscriber.on('message', (_channel, raw) => {
-      try {
-        const envelope = JSON.parse(raw) as RealtimeEnvelope;
-        if (envelope && typeof envelope.origin === 'string' && typeof envelope.tenantId === 'string') onMessage(envelope);
-      } catch {
-        // Ignore malformed cross-instance notifications.
-      }
-    });
-    realtimeSubscriber = subscriber;
-  } catch (error) {
-    console.error('Redis 实时订阅初始化失败:', error instanceof Error ? error.message : error);
-  }
+  subscriberClosed = false;
+  subscriberHandler = onMessage;
+  await openRealtimeSubscriber();
 }
 
 export async function publishRealtime(envelope: RealtimeEnvelope): Promise<void> {
