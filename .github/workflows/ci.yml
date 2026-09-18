@@ -43,8 +43,8 @@ jobs:
 
       - name: Go test and vet
         run: |
-          go test ./...
-          go vet ./...
+          go test .
+          go vet .
 
       - name: Compose configuration
         env:
@@ -59,4 +59,5 @@ jobs:
       - name: Build service images
         run: |
           docker build -f backend/Dockerfile backend
+          docker build -f frontend/Dockerfile frontend
           docker build -f Dockerfile .

@@ -11,7 +11,7 @@ COZE_BOT_ID=your-bot-id
 COZE_TOKEN=your-server-token
 ```
 
-访问令牌必须具备 `chat` 和 `listMessage` 权限，Bot 必须已经发布。不要在终端回显 Token、不要把 Token 写入 `.env` 以外的仓库文件，也不要调用历史的 `/open/v1/bot/chat` 示例。
+访问令牌必须具备 `chat`、`getChat` 和 `listMessage` 权限，Bot 必须已经发布。不要在终端回显 Token、不要把 Token 写入 `.env` 以外的仓库文件，也不要调用历史的 `/open/v1/bot/chat` 示例。Node 后端使用 `POST /chat`、`GET /chat/retrieve` 和 `GET /chat/message/list`，总等待上限为 30 秒。
 
 官方参考：
 

@@ -12,8 +12,8 @@ COPY go.mod ./
 # 下载依赖
 RUN go mod download
 
-# 复制源代码
-COPY . .
+# 根 Go 适配器只需要自身源码；避免把 Node 依赖和前端构建产物送进 Docker 构建上下文。
+COPY main.go ./
 
 # 构建应用
 RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o main .

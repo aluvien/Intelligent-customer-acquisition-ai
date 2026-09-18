@@ -43,9 +43,12 @@ const ActiveConversations: React.FC = () => {
   const [status, setStatus] = useState('active');
   const [error, setError] = useState<string | null>(null);
   const [drafts, setDrafts] = useState<Record<string, AiDraft>>({});
+  const [historyCursor, setHistoryCursor] = useState<string | null>(null);
+  const [historyHasMore, setHistoryHasMore] = useState(false);
+  const [loadingOlder, setLoadingOlder] = useState(false);
   const messageIds = useRef<Set<string>>(new Set());
   const conversationIds = useRef<Set<string>>(new Set());
-  const pendingMessageKey = useRef<string | null>(null);
+  const pendingMessageKey = useRef<{ key: string; content: string } | null>(null);
   const messageRequestId = useRef(0);
 
   const loadConversations = useCallback(async () => {
@@ -63,37 +66,54 @@ const ActiveConversations: React.FC = () => {
     }
   }, [status]);
 
-  const loadMessages = useCallback(async (conversation: Conversation) => {
-    const requestId = ++messageRequestId.current;
-    pendingMessageKey.current = null;
-    setSelected(conversation);
-    setDetailLoading(true);
+  const loadMessages = useCallback(async (conversation: Conversation, before?: string) => {
+    const requestId = before ? messageRequestId.current : ++messageRequestId.current;
+    if (!before) {
+      pendingMessageKey.current = null;
+      messageIds.current = new Set();
+      setSelected(conversation);
+      setDetailLoading(true);
+    }
     try {
-      const response = await api.get(`/conversations/${conversation.id}/messages`);
+      const response = await api.get(`/conversations/${conversation.id}/messages`, { params: before ? { before } : undefined });
       const nextMessages: ConversationMessage[] = response.data.data.messages || [];
       nextMessages.forEach((item) => messageIds.current.add(item.id));
-      if (requestId === messageRequestId.current) setMessages(nextMessages);
-      try {
-        const draftResponse = await api.get('/ai/runs', { params: { conversationId: conversation.id } });
-        if (requestId === messageRequestId.current) {
-          const runs: AiDraft[] = (draftResponse.data.data.runs || []).map((run: any) => ({
-            aiRunId: run.id,
-            conversationId: run.conversationId,
-            draft: run.draft,
-            evidence: run.evidence,
-          }));
-          const recoveredIds = new Set(runs.map((run) => run.aiRunId));
-          setDrafts((items) => {
-            const next = { ...items };
-            Object.keys(next).forEach((id) => {
-              if (next[id].conversationId === conversation.id && !recoveredIds.has(id)) delete next[id];
-            });
-            runs.forEach((run) => { if (!next[run.aiRunId]) next[run.aiRunId] = run; });
-            return next;
+      if (requestId === messageRequestId.current) {
+        if (before) {
+          setMessages((items) => {
+            const merged = new Map(items.map((item) => [item.id, item]));
+            nextMessages.forEach((item) => merged.set(item.id, item));
+            return Array.from(merged.values()).sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
           });
+        } else {
+          setMessages(nextMessages);
         }
-      } catch {
-        // Realtime draft notifications remain available if the recovery request fails.
+        setHistoryHasMore(Boolean(response.data.data.pagination?.hasMore));
+        setHistoryCursor(response.data.data.pagination?.nextBefore || null);
+      }
+      if (!before) {
+        try {
+          const draftResponse = await api.get('/ai/runs', { params: { conversationId: conversation.id } });
+          if (requestId === messageRequestId.current) {
+            const runs: AiDraft[] = (draftResponse.data.data.runs || []).map((run: any) => ({
+              aiRunId: run.id,
+              conversationId: run.conversationId,
+              draft: run.draft,
+              evidence: run.evidence,
+            }));
+            const recoveredIds = new Set(runs.map((run) => run.aiRunId));
+            setDrafts((items) => {
+              const next = { ...items };
+              Object.keys(next).forEach((id) => {
+                if (next[id].conversationId === conversation.id && !recoveredIds.has(id)) delete next[id];
+              });
+              runs.forEach((run) => { if (!next[run.aiRunId]) next[run.aiRunId] = run; });
+              return next;
+            });
+          }
+        } catch {
+          // Realtime draft notifications remain available if the recovery request fails.
+        }
       }
     } catch (err: any) {
       message.error(err?.response?.data?.message || '消息加载失败');
@@ -101,6 +121,14 @@ const ActiveConversations: React.FC = () => {
       if (requestId === messageRequestId.current) setDetailLoading(false);
     }
   }, []);
+
+  const loadOlder = async () => {
+    if (!selected || !historyCursor || loadingOlder) return;
+    setLoadingOlder(true);
+    try { await loadMessages(selected, historyCursor); }
+    catch (err: any) { message.error(err?.response?.data?.message || '更早消息加载失败'); }
+    finally { setLoadingOlder(false); }
+  };
 
   useEffect(() => { void loadConversations(); }, [loadConversations]);
 
@@ -143,11 +171,14 @@ const ActiveConversations: React.FC = () => {
 
   const send = async () => {
     if (!selected || !content.trim()) return;
-    const idempotencyKey = pendingMessageKey.current || crypto.randomUUID();
-    pendingMessageKey.current = idempotencyKey;
+    const messageContent = content.trim();
+    const pending = pendingMessageKey.current?.content === messageContent
+      ? pendingMessageKey.current
+      : { key: crypto.randomUUID(), content: messageContent };
+    pendingMessageKey.current = pending;
     try {
-      const response = await api.post(`/conversations/${selected.id}/messages`, { content: content.trim() }, { headers: { 'Idempotency-Key': idempotencyKey } });
-      pendingMessageKey.current = null;
+      const response = await api.post(`/conversations/${selected.id}/messages`, { content: messageContent }, { headers: { 'Idempotency-Key': pending.key } });
+      if (pendingMessageKey.current?.key === pending.key) pendingMessageKey.current = null;
       setContent('');
       message.success(response.data.message || '回复已进入发送队列');
       await loadMessages(selected);
@@ -193,6 +224,7 @@ const ActiveConversations: React.FC = () => {
       <Card title={selected ? `${selected.userNickname} · ${selected.status}` : '选择一个会话'} extra={selected && <Space><Button danger icon={<CloseCircleOutlined />} onClick={() => void close()} disabled={selected.status === 'closed'}>关闭</Button><Select value={selected.mode} onChange={async (mode) => { try { await api.put(`/conversations/${selected.id}/mode`, { mode }); setSelected({ ...selected, mode }); await loadConversations(); } catch (err: any) { message.error(err?.response?.data?.message || '会话模式更新失败'); } }} options={[{ value: 'human', label: '人工接管' }, { value: 'ai_draft', label: 'AI草稿' }, { value: 'auto', label: '自动回复（管理员）' }]} style={{ width: 150 }} /></Space>}>
         {!selected ? <Empty description="选择会话查看历史" /> : detailLoading ? <Spin /> : <>
           {selectedDrafts.map((draft) => <Alert key={draft.aiRunId} type="info" showIcon style={{ marginBottom: 12 }} message="AI 草稿（需人工批准）" description={<><Input.TextArea value={draft.draft} onChange={(event) => setDrafts((items) => ({ ...items, [draft.aiRunId]: { ...draft, draft: event.target.value } }))} autoSize={{ minRows: 2, maxRows: 5 }} /><Button type="primary" style={{ marginTop: 8 }} onClick={() => void approveDraft(draft)}>批准并发送</Button></>} />)}
+          {historyHasMore && <Button loading={loadingOlder} onClick={() => void loadOlder()} style={{ marginBottom: 8 }}>加载更早消息</Button>}
           <div style={{ height: 420, overflowY: 'auto', padding: '8px 0' }}>{messages.map((item) => <div key={item.id} style={{ display: 'flex', justifyContent: item.direction === 'outbound' ? 'flex-end' : 'flex-start', marginBottom: 12 }}><div style={{ maxWidth: '72%', padding: '10px 12px', borderRadius: 10, background: item.direction === 'outbound' ? BUSINESS_THEME.primary : '#f4f6f8', color: item.direction === 'outbound' ? '#fff' : '#1A2332' }}><div>{item.content}</div><Typography.Text style={{ fontSize: 11, color: item.direction === 'outbound' ? 'rgba(255,255,255,.75)' : '#778' }}>{new Date(item.createdAt).toLocaleString()} · {item.deliveryStatus}</Typography.Text></div></div>)}</div>
           <Space.Compact style={{ width: '100%' }}><Input.TextArea autoSize={{ minRows: 2, maxRows: 5 }} value={content} onChange={(event) => setContent(event.target.value)} onPressEnter={(event) => { if (!event.shiftKey) { event.preventDefault(); void send(); } }} placeholder="输入人工回复，Enter 发送，Shift+Enter 换行" /><Button type="primary" icon={<SendOutlined />} onClick={() => void send()}>发送</Button></Space.Compact>
         </>}

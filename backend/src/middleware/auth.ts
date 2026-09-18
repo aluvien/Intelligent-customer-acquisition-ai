@@ -25,7 +25,7 @@ export async function resolveAccessToken(token: string): Promise<AuthContext | n
       issuer: config.jwtIssuer,
       audience: config.jwtAudience,
       algorithms: ['HS256'],
-    }) as jwt.JwtPayload & Partial<AuthContext> & { tokenType?: string };
+    }) as jwt.JwtPayload & Partial<AuthContext> & { tokenType?: string; authVersion?: unknown };
     if (decoded.tokenType !== 'access' || !decoded.userId || !decoded.tenantId || !decoded.sessionId) return null;
 
     const result = await query<{
@@ -34,10 +34,11 @@ export async function resolveAccessToken(token: string): Promise<AuthContext | n
       role: 'admin' | 'operator' | 'viewer';
       status: 'active' | 'inactive';
       tenant_status: 'active' | 'suspended' | 'expired';
+      auth_version: number;
       session_revoked_at: Date | null;
       session_expires_at: Date;
     }>(
-      `SELECT u.id AS user_id, u.tenant_id, u.role, u.status, t.status AS tenant_status,
+      `SELECT u.id AS user_id, u.tenant_id, u.role, u.status, u.auth_version, t.status AS tenant_status,
               s.revoked_at AS session_revoked_at, s.expires_at AS session_expires_at
          FROM users u
          JOIN tenants t ON t.id = u.tenant_id
@@ -46,7 +47,7 @@ export async function resolveAccessToken(token: string): Promise<AuthContext | n
       [decoded.userId, decoded.sessionId, decoded.tenantId],
     );
     const row = result.rows[0];
-    if (!row || row.status !== 'active' || row.tenant_status !== 'active' || row.session_revoked_at || new Date(row.session_expires_at) <= new Date()) return null;
+    if (!row || typeof decoded.authVersion !== 'number' || decoded.authVersion !== Number(row.auth_version) || row.status !== 'active' || row.tenant_status !== 'active' || row.session_revoked_at || new Date(row.session_expires_at) <= new Date()) return null;
     return { userId: row.user_id, tenantId: row.tenant_id, role: row.role, sessionId: decoded.sessionId };
   } catch (error) {
     if (error instanceof AppError && error.code.startsWith('DATABASE_')) throw error;

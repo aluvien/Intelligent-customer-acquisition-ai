@@ -27,6 +27,8 @@ test('Coze extraction returns only the assistant answer', () => {
     { role: 'assistant', type: 'verbose', content_type: 'text', content: '{"msg_type":"generate_answer_finish"}' },
     { role: 'assistant', type: 'follow_up', content_type: 'text', content: '你还想了解什么？' },
     { role: 'assistant', type: 'answer', content_type: 'text', content: '这是基于企业知识的回答。' },
+    { role: 'assistant', type: 'answer', content_type: 'text', content: '这是回答的第二段。' },
+    { role: 'assistant', type: 'answer', content: '缺少 content_type，不应作为回复。' },
   ] });
-  assert.equal(text, '这是基于企业知识的回答。');
+  assert.equal(text, '这是基于企业知识的回答。\n\n这是回答的第二段。');
 });

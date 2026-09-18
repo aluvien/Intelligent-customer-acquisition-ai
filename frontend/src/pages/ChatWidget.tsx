@@ -4,7 +4,7 @@ import { SendOutlined } from '@ant-design/icons';
 import { useParams } from 'react-router-dom';
 import api from '../services/api';
 
-type Session = { sessionId: string; token: string; visitorId: string };
+type Session = { sessionId: string; token: string; visitorId: string; expiresAt?: number };
 type ChatMessage = { id: string; direction: 'inbound' | 'outbound'; senderType: string; content: string; deliveryStatus: string; createdAt: string };
 
 const ChatWidget: React.FC = () => {
@@ -15,12 +15,40 @@ const ChatWidget: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [leadOpen, setLeadOpen] = useState(false);
+  const [historyCursor, setHistoryCursor] = useState<string | null>(null);
+  const [historyHasMore, setHistoryHasMore] = useState(false);
+  const [loadingOlder, setLoadingOlder] = useState(false);
   const [leadForm] = Form.useForm();
-  const pendingMessageKey = useRef<string | null>(null);
+  const pendingMessageKey = useRef<{ key: string; content: string } | null>(null);
 
-  const loadMessages = useCallback(async (current: Session) => {
-    const response = await api.get(`/public/sessions/${current.sessionId}/messages`, { headers: { 'X-Visitor-Token': current.token } });
-    setMessages(response.data.data.messages || []);
+  const createSession = useCallback(async (): Promise<Session> => {
+    if (!widgetId) throw new Error('访客入口不存在');
+    const response = await api.post(`/public/widgets/${widgetId}/sessions`);
+    const next = response.data.data as Session & { expiresInHours?: number };
+    return { ...next, expiresAt: Date.now() + Number(next.expiresInHours || 24) * 60 * 60 * 1000 };
+  }, [widgetId]);
+
+  const loadMessages = useCallback(async (current: Session, before?: string, replace = false) => {
+    const response = await api.get(`/public/sessions/${current.sessionId}/messages`, { params: before ? { before } : undefined, headers: { 'X-Visitor-Token': current.token } });
+    const nextMessages: ChatMessage[] = response.data.data.messages || [];
+    if (before) {
+      setMessages((items) => {
+        const merged = new Map(items.map((item) => [item.id, item]));
+        nextMessages.forEach((item) => merged.set(item.id, item));
+        return Array.from(merged.values()).sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
+      });
+    } else {
+      setMessages((items) => {
+        if (replace || items.length === 0) return nextMessages;
+        const merged = new Map(items.map((item) => [item.id, item]));
+        nextMessages.forEach((item) => merged.set(item.id, item));
+        return Array.from(merged.values()).sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
+      });
+    }
+    const nextHasMore = Boolean(response.data.data.pagination?.hasMore);
+    const nextCursor = response.data.data.pagination?.nextBefore || null;
+    setHistoryHasMore((currentValue) => before || replace || !currentValue ? nextHasMore : currentValue || nextHasMore);
+    setHistoryCursor((currentValue) => before || replace || !currentValue ? nextCursor : currentValue || nextCursor);
   }, []);
 
   useEffect(() => {
@@ -29,30 +57,75 @@ const ChatWidget: React.FC = () => {
       if (!widgetId) return;
       try {
         const key = `visitor-session:${widgetId}`;
-        const stored = sessionStorage.getItem(key);
-        const current: Session = stored ? JSON.parse(stored) : (await api.post(`/public/widgets/${widgetId}/sessions`)).data.data;
-        if (!stored) sessionStorage.setItem(key, JSON.stringify(current));
+        const rawStored = sessionStorage.getItem(key);
+        let current: Session | null = null;
+        if (rawStored) {
+          try {
+            const stored = JSON.parse(rawStored) as Session;
+            if (!stored.expiresAt || stored.expiresAt > Date.now()) current = stored;
+            else sessionStorage.removeItem(key);
+          } catch { sessionStorage.removeItem(key); }
+        }
+        if (!current) {
+          current = await createSession();
+          sessionStorage.setItem(key, JSON.stringify(current));
+        }
         if (!active) return;
         setSession(current);
-        await loadMessages(current);
+        try {
+          await loadMessages(current, undefined, true);
+        } catch (err: any) {
+          if (err?.response?.status !== 401) throw err;
+          sessionStorage.removeItem(key);
+          const replacement = await createSession();
+          sessionStorage.setItem(key, JSON.stringify(replacement));
+          if (active) { setMessages([]); setHistoryCursor(null); setHistoryHasMore(false); setSession(replacement); await loadMessages(replacement, undefined, true); }
+        }
       } catch (err: any) { if (active) setError(err?.response?.data?.message || '访客入口暂不可用'); }
       finally { if (active) setLoading(false); }
     };
     void init();
     return () => { active = false; };
-  }, [widgetId, loadMessages]);
+  }, [widgetId, createSession, loadMessages]);
 
   useEffect(() => {
     if (!session) return undefined;
-    const timer = window.setInterval(() => { if (document.visibilityState === 'visible') void loadMessages(session).catch(() => undefined); }, 5000);
+    const timer = window.setInterval(() => {
+      if (document.visibilityState !== 'visible') return;
+      void loadMessages(session).catch(async (err: any) => {
+        if (err?.response?.status !== 401 || !widgetId) return;
+        const key = `visitor-session:${widgetId}`;
+        try {
+          sessionStorage.removeItem(key);
+          const replacement = await createSession();
+          sessionStorage.setItem(key, JSON.stringify(replacement));
+          setSession(replacement);
+          setMessages([]);
+          setHistoryCursor(null);
+          setHistoryHasMore(false);
+          await loadMessages(replacement, undefined, true);
+        } catch { /* The next poll or a user action will surface the error. */ }
+      });
+    }, 5000);
     return () => window.clearInterval(timer);
-  }, [session, loadMessages]);
+  }, [session, widgetId, createSession, loadMessages]);
+
+  const loadOlder = async () => {
+    if (!session || !historyCursor || loadingOlder) return;
+    setLoadingOlder(true);
+    try { await loadMessages(session, historyCursor); }
+    catch (err: any) { message.error(err?.response?.data?.message || '更早消息加载失败'); }
+    finally { setLoadingOlder(false); }
+  };
 
   const send = async () => {
     if (!session || !content.trim()) return;
-    const idempotencyKey = pendingMessageKey.current || crypto.randomUUID();
-    pendingMessageKey.current = idempotencyKey;
-    try { await api.post(`/public/sessions/${session.sessionId}/messages`, { content: content.trim() }, { headers: { 'X-Visitor-Token': session.token, 'Idempotency-Key': idempotencyKey } }); pendingMessageKey.current = null; setContent(''); await loadMessages(session); }
+    const messageContent = content.trim();
+    const pending = pendingMessageKey.current?.content === messageContent
+      ? pendingMessageKey.current
+      : { key: crypto.randomUUID(), content: messageContent };
+    pendingMessageKey.current = pending;
+    try { await api.post(`/public/sessions/${session.sessionId}/messages`, { content: messageContent }, { headers: { 'X-Visitor-Token': session.token, 'Idempotency-Key': pending.key } }); if (pendingMessageKey.current?.key === pending.key) pendingMessageKey.current = null; setContent(''); await loadMessages(session); }
     catch (err: any) { message.error(err?.response?.data?.message || '消息发送失败'); }
   };
 
@@ -65,6 +138,7 @@ const ChatWidget: React.FC = () => {
   return <div style={{ minHeight: '100vh', background: '#f4f7f6', padding: 24 }}><Card title="在线咨询" style={{ maxWidth: 680, margin: '0 auto' }} extra={<Button onClick={() => setLeadOpen((value) => !value)}>留下联系方式</Button>}>
     {error && <Alert type="error" showIcon message={error} />}
     {loading ? <Typography.Paragraph>正在建立访客会话…</Typography.Paragraph> : <>
+      {historyHasMore && <Button loading={loadingOlder} onClick={() => void loadOlder()} style={{ marginBottom: 8 }}>加载更早消息</Button>}
       <div style={{ minHeight: 360, maxHeight: 520, overflowY: 'auto', padding: 8 }}>{messages.map((item) => <div key={item.id} style={{ display: 'flex', justifyContent: item.direction === 'outbound' ? 'flex-start' : 'flex-end', marginBottom: 12 }}><div style={{ maxWidth: '75%', padding: '10px 12px', borderRadius: 10, background: item.direction === 'outbound' ? '#eef6f3' : '#0e7c6b', color: item.direction === 'outbound' ? '#1a2332' : '#fff' }}>{item.content}<div style={{ fontSize: 11, opacity: .7, marginTop: 4 }}>{new Date(item.createdAt).toLocaleTimeString()} · {item.deliveryStatus}</div></div></div>)}</div>
       <Space.Compact style={{ width: '100%' }}><Input.TextArea value={content} onChange={(event) => setContent(event.target.value)} onPressEnter={(event) => { if (!event.shiftKey) { event.preventDefault(); void send(); } }} autoSize={{ minRows: 2, maxRows: 5 }} placeholder="请输入您的问题" /><Button type="primary" icon={<SendOutlined />} onClick={() => void send()}>发送</Button></Space.Compact>
     </>}

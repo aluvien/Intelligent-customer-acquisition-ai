@@ -20,6 +20,7 @@ type UserRow = {
   avatar: string | null;
   role: 'admin' | 'operator' | 'viewer';
   status: 'active' | 'inactive';
+  auth_version: number;
   created_at: Date;
   updated_at: Date;
   tenant_name: string;
@@ -63,7 +64,7 @@ async function findUserById(userId: string): Promise<UserRow | undefined> {
 
 function signAccessToken(user: UserRow, sessionId: string): string {
   return jwt.sign(
-    { userId: user.id, tenantId: user.tenant_id, role: user.role, sessionId, tokenType: 'access' },
+    { userId: user.id, tenantId: user.tenant_id, role: user.role, sessionId, authVersion: user.auth_version, tokenType: 'access' },
     getJwtSecret(),
     { expiresIn: config.accessTokenTtl as jwt.SignOptions['expiresIn'], issuer: config.jwtIssuer, audience: config.jwtAudience, algorithm: 'HS256' },
   );
@@ -71,13 +72,24 @@ function signAccessToken(user: UserRow, sessionId: string): string {
 
 async function createSession(user: UserRow): Promise<{ token: string; refreshToken: string }> {
   const sessionId = randomId();
+  const familyId = randomId();
   const refreshToken = randomOpaqueToken();
-  await query(
-    `INSERT INTO auth_sessions(id, user_id, tenant_id, refresh_token_hash, expires_at)
-     VALUES ($1, $2, $3, $4, NOW() + ($5 || ' days')::interval)`,
-    [sessionId, user.id, user.tenant_id, hashOpaqueToken(refreshToken), String(config.refreshTokenTtlDays)],
-  );
-  return { token: signAccessToken(user, sessionId), refreshToken };
+  return withTransaction(async (client) => {
+    const current = await client.query<UserRow>(
+      `SELECT u.*, t.name AS tenant_name, t.plan AS tenant_plan, t.status AS tenant_status
+         FROM users u JOIN tenants t ON t.id = u.tenant_id
+        WHERE u.id = $1 AND u.tenant_id = $2 AND u.status = 'active' AND t.status = 'active'
+        FOR UPDATE OF u`,
+      [user.id, user.tenant_id],
+    );
+    if (!current.rows[0]) throw new AppError(403, 'ACCOUNT_DISABLED', '账户或企业已被禁用');
+    await client.query(
+      `INSERT INTO auth_sessions(id, user_id, tenant_id, family_id, refresh_token_hash, expires_at)
+       VALUES ($1, $2, $3, $4, $5, NOW() + ($6 || ' days')::interval)`,
+      [sessionId, user.id, user.tenant_id, familyId, hashOpaqueToken(refreshToken), String(config.refreshTokenTtlDays)],
+    );
+    return { token: signAccessToken(current.rows[0], sessionId), refreshToken };
+  });
 }
 
 function validateCredentials(username: unknown, password: unknown): asserts username is string {
@@ -141,17 +153,37 @@ router.post('/refresh', async (req, res, next) => {
     const refreshToken = parseCookies(req.headers.cookie)[REFRESH_COOKIE];
     if (!refreshToken) throw new AppError(401, 'REFRESH_REQUIRED', '刷新会话不存在');
     const nextSession = await withTransaction(async (client) => {
-      const current = await client.query<{ id: string; user_id: string }>(`SELECT id, user_id FROM auth_sessions WHERE refresh_token_hash = $1 AND revoked_at IS NULL AND expires_at > NOW() FOR UPDATE`, [hashOpaqueToken(refreshToken)]);
-      const session = current.rows[0];
-      if (!session) throw new AppError(401, 'REFRESH_INVALID', '刷新会话无效、已过期或已使用');
-      const user = await findUserById(session.user_id);
-      if (!user || user.status !== 'active' || user.tenant_status !== 'active') throw new AppError(401, 'ACCOUNT_DISABLED', '账户不可用');
-      const revoked = await client.query('UPDATE auth_sessions SET revoked_at = NOW(), last_used_at = NOW() WHERE id = $1 AND revoked_at IS NULL RETURNING id', [session.id]);
-      if (!revoked.rowCount) throw new AppError(401, 'REFRESH_REPLAYED', '刷新会话已使用，请重新登录');
-      const nextId = randomId();
+      // Lock the user before the session so refresh, logout and password changes
+      // share one ordering and cannot miss a newly rotated/revoked session.
+      const candidate = await client.query<UserRow & { session_id: string; family_id: string }>(
+        `SELECT u.*, t.name AS tenant_name, t.plan AS tenant_plan, t.status AS tenant_status,
+                s.id AS session_id, s.family_id
+           FROM auth_sessions s
+           JOIN users u ON u.id = s.user_id AND u.tenant_id = s.tenant_id
+           JOIN tenants t ON t.id = u.tenant_id
+          WHERE s.refresh_token_hash = $1 AND s.revoked_at IS NULL AND s.expires_at > NOW()
+            AND u.status = 'active' AND t.status = 'active'
+          FOR UPDATE OF u`,
+        [hashOpaqueToken(refreshToken)],
+      );
+      const locked = candidate.rows[0];
+      if (!locked) throw new AppError(401, 'REFRESH_INVALID', '刷新会话无效、已过期或已使用');
+      const session = await client.query<{ id: string; family_id: string }>(
+        `SELECT id, family_id FROM auth_sessions
+          WHERE id = $1 AND user_id = $2 AND tenant_id = $3
+            AND refresh_token_hash = $4 AND revoked_at IS NULL AND expires_at > NOW()
+          FOR UPDATE`,
+        [locked.session_id, locked.id, locked.tenant_id, hashOpaqueToken(refreshToken)],
+      );
+      if (!session.rows[0]) throw new AppError(401, 'REFRESH_REPLAYED', '刷新会话已使用，请重新登录');
       const nextRefresh = randomOpaqueToken();
-      await client.query(`INSERT INTO auth_sessions(id, user_id, tenant_id, refresh_token_hash, expires_at) VALUES ($1, $2, $3, $4, NOW() + ($5 || ' days')::interval)`, [nextId, user.id, user.tenant_id, hashOpaqueToken(nextRefresh), String(config.refreshTokenTtlDays)]);
-      return { token: signAccessToken(user, nextId), refreshToken: nextRefresh };
+      await client.query(
+        `UPDATE auth_sessions
+            SET refresh_token_hash = $2, expires_at = NOW() + ($3 || ' days')::interval, last_used_at = NOW()
+          WHERE id = $1 AND revoked_at IS NULL`,
+        [locked.session_id, hashOpaqueToken(nextRefresh), String(config.refreshTokenTtlDays)],
+      );
+      return { token: signAccessToken(locked, locked.session_id), refreshToken: nextRefresh };
     });
     setRefreshCookie(res, nextSession.refreshToken);
     res.json({ success: true, message: 'Token 刷新成功', data: { token: nextSession.token } });
@@ -162,7 +194,13 @@ router.post('/refresh', async (req, res, next) => {
 
 router.post('/logout', requireAuth, async (req, res, next) => {
   try {
-    await query('UPDATE auth_sessions SET revoked_at = COALESCE(revoked_at, NOW()) WHERE id = $1', [req.auth!.sessionId]);
+    await withTransaction(async (client) => {
+      const user = await client.query<{ id: string }>('SELECT id FROM users WHERE id = $1 AND tenant_id = $2 FOR UPDATE', [req.auth!.userId, req.auth!.tenantId]);
+      if (!user.rowCount) return;
+      const session = await client.query<{ family_id: string }>('SELECT family_id FROM auth_sessions WHERE id = $1 AND user_id = $2 AND tenant_id = $3 FOR UPDATE', [req.auth!.sessionId, req.auth!.userId, req.auth!.tenantId]);
+      if (!session.rows[0]) return;
+      await client.query('UPDATE auth_sessions SET revoked_at = COALESCE(revoked_at, NOW()), last_used_at = NOW() WHERE user_id = $1 AND tenant_id = $2 AND family_id = $3', [req.auth!.userId, req.auth!.tenantId, session.rows[0].family_id]);
+    });
     disconnectSession(req.auth!.sessionId);
     clearRefreshCookie(res);
     res.json({ success: true, message: '已退出登录', data: null });
@@ -178,8 +216,10 @@ router.put('/password', requireAuth, async (req, res, next) => {
     if (!user || !(await bcrypt.compare(req.body.oldPassword, user.password_hash))) throw new AppError(400, 'PASSWORD_MISMATCH', '旧密码错误');
     const passwordHash = await bcrypt.hash(req.body.newPassword, 12);
     await withTransaction(async (client) => {
-      await client.query('UPDATE users SET password_hash = $1, password_changed_at = NOW(), updated_at = NOW() WHERE id = $2', [passwordHash, user.id]);
-      await client.query('UPDATE auth_sessions SET revoked_at = NOW() WHERE user_id = $1', [user.id]);
+      const locked = await client.query<UserRow>(`SELECT u.*, t.name AS tenant_name, t.plan AS tenant_plan, t.status AS tenant_status FROM users u JOIN tenants t ON t.id = u.tenant_id WHERE u.id = $1 AND u.tenant_id = $2 AND u.status = 'active' AND t.status = 'active' FOR UPDATE OF u`, [user.id, req.auth!.tenantId]);
+      if (!locked.rows[0] || !(await bcrypt.compare(req.body.oldPassword, locked.rows[0].password_hash))) throw new AppError(400, 'PASSWORD_MISMATCH', '旧密码错误');
+      await client.query('UPDATE users SET password_hash = $1, auth_version = auth_version + 1, password_changed_at = NOW(), updated_at = NOW() WHERE id = $2 AND tenant_id = $3', [passwordHash, user.id, req.auth!.tenantId]);
+      await client.query('UPDATE auth_sessions SET revoked_at = NOW(), last_used_at = NOW() WHERE user_id = $1 AND tenant_id = $2', [user.id, req.auth!.tenantId]);
     });
     disconnectUser(user.id);
     clearRefreshCookie(res);

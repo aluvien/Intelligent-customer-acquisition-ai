@@ -4,7 +4,7 @@ import { config, hashOpaqueToken, randomId, randomOpaqueToken } from '../config'
 import { AppError } from '../errors';
 import { broadcast } from '../realtime/hub';
 import { insertJob } from '../jobs/worker';
-import { optionalText, requireText } from './helpers';
+import { encodeMessageCursor, optionalText, parseMessageCursor, requireText } from './helpers';
 
 const router = express.Router();
 
@@ -53,16 +53,22 @@ router.post('/widgets/:widgetId/sessions', async (req, res, next) => {
 router.get('/sessions/:sessionId/messages', async (req, res, next) => {
   try {
     const context = await visitorContext(req);
-    const beforeRaw = typeof req.query.before === 'string' ? req.query.before : undefined;
-    const before = beforeRaw ? new Date(beforeRaw) : undefined;
-    if (beforeRaw && (!before || Number.isNaN(before.getTime()))) throw new AppError(400, 'INVALID_CURSOR', '消息游标无效');
+    const before = parseMessageCursor(typeof req.query.before === 'string' ? req.query.before : undefined);
     const messages = await withTransaction(async (client) => {
-      await client.query(`UPDATE messages SET delivery_status = 'delivered' WHERE tenant_id = $1 AND direction = 'outbound' AND delivery_status = 'provider_accepted' AND conversation_id IN (SELECT id FROM conversations WHERE tenant_id = $1 AND widget_id = $2 AND external_user_id = $3)`, [context.tenantId, context.widgetId, context.visitorId]);
       const values: unknown[] = [context.tenantId, context.widgetId, context.visitorId];
-      const cursorFilter = before ? ` AND created_at < $4` : '';
-      if (before) values.push(before.toISOString());
-      const result = await client.query(`SELECT id, conversation_id AS "conversationId", direction, sender_type AS "senderType", content, delivery_status AS "deliveryStatus", created_at AS "createdAt" FROM messages WHERE tenant_id = $1 AND conversation_id IN (SELECT id FROM conversations WHERE tenant_id = $1 AND widget_id = $2 AND external_user_id = $3) AND (direction = 'inbound' OR delivery_status IN ('provider_accepted', 'delivered'))${cursorFilter} ORDER BY created_at DESC LIMIT 200`, values);
-      return { rows: result.rows.reverse(), hasMore: result.rowCount === 200, nextBefore: result.rows.length === 200 ? new Date(result.rows[result.rows.length - 1].createdAt).toISOString() : null };
+      const cursorFilter = before
+        ? before.id ? ` AND (created_at < $4 OR (created_at = $4 AND id < $5))` : ' AND created_at < $4'
+        : '';
+      if (before) values.push(before.createdAt.toISOString());
+      if (before?.id) values.push(before.id);
+      const result = await client.query(`SELECT id, conversation_id AS "conversationId", direction, sender_type AS "senderType", content, delivery_status AS "deliveryStatus", created_at AS "createdAt" FROM messages WHERE tenant_id = $1 AND conversation_id IN (SELECT id FROM conversations WHERE tenant_id = $1 AND widget_id = $2 AND external_user_id = $3) AND (direction = 'inbound' OR delivery_status IN ('provider_accepted', 'delivered'))${cursorFilter} ORDER BY created_at DESC, id DESC LIMIT 200`, values);
+      const providerAcceptedIds = result.rows.filter((row) => row.deliveryStatus === 'provider_accepted').map((row) => row.id);
+      if (providerAcceptedIds.length > 0) {
+        await client.query(`UPDATE messages SET delivery_status = 'delivered' WHERE tenant_id = $1 AND id = ANY($2::text[]) AND delivery_status = 'provider_accepted'`, [context.tenantId, providerAcceptedIds]);
+      }
+      const rows = result.rows.reverse().map((row) => providerAcceptedIds.includes(row.id) ? { ...row, deliveryStatus: 'delivered' } : row);
+      const oldest = result.rows[result.rows.length - 1];
+      return { rows, hasMore: result.rowCount === 200, nextBefore: result.rowCount === 200 && oldest ? encodeMessageCursor(oldest.createdAt, oldest.id) : null };
     });
     res.json({ success: true, message: '获取消息成功', data: { messages: messages.rows, pagination: { hasMore: messages.hasMore, nextBefore: messages.nextBefore } } });
   } catch (error) { next(error); }
@@ -98,8 +104,10 @@ router.post('/sessions/:sessionId/messages', async (req, res, next) => {
       const eventId = randomId();
       const eventInsert = await client.query<{ id: string }>(`INSERT INTO inbound_events(id, tenant_id, source, external_event_id, event_type, payload) VALUES ($1, $2, $3, $4, 'web_message', $5::jsonb) ON CONFLICT DO NOTHING RETURNING id`, [eventId, context.tenantId, eventSource, idempotencyKey, JSON.stringify({ version: '1', eventId, tenantId: context.tenantId, channelAccountId: null, source: eventSource, externalEventId: idempotencyKey, conversationId, type: 'web_message', content, occurredAt: new Date().toISOString(), receivedAt: new Date().toISOString(), metadata: { visitorSessionId: context.sessionId } })]);
       if (!eventInsert.rowCount) {
-        const existing = await client.query<{ id: string; conversation_id: string }>(`SELECT id, conversation_id FROM messages WHERE tenant_id = $1 AND conversation_id = $2 AND external_message_id = $3`, [context.tenantId, conversationId, idempotencyKey]);
-        return { conversationId: existing.rows[0]?.conversation_id || conversationId, messageId: existing.rows[0]?.id || messageId, aiRunId: undefined, mode, modeVersion, duplicate: true };
+        const existing = await client.query<{ id: string; conversation_id: string; content: string }>(`SELECT id, conversation_id, content FROM messages WHERE tenant_id = $1 AND conversation_id = $2 AND external_message_id = $3`, [context.tenantId, conversationId, idempotencyKey]);
+        if (!existing.rows[0]) throw new AppError(409, 'IDEMPOTENCY_RECORD_MISSING', '幂等记录已存在但消息记录缺失，请重试');
+        if (existing.rows[0].content !== content) throw new AppError(409, 'IDEMPOTENCY_KEY_REUSED', 'Idempotency-Key 已用于另一条消息');
+        return { conversationId: existing.rows[0].conversation_id, messageId: existing.rows[0].id, aiRunId: undefined, mode, modeVersion, duplicate: true };
       }
       await client.query(`INSERT INTO messages(id, tenant_id, conversation_id, external_message_id, direction, sender_type, message_type, content, delivery_status, metadata) VALUES ($1, $2, $3, $4, 'inbound', 'visitor', 'web_message', $5, 'received', $6::jsonb)`, [messageId, context.tenantId, conversationId, idempotencyKey, content, JSON.stringify({ visitorSessionId: context.sessionId, standardEventVersion: '1' })]);
       await client.query('UPDATE conversations SET message_count = message_count + 1, last_message_at = NOW() WHERE id = $1', [conversationId]);

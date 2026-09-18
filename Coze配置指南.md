@@ -4,7 +4,7 @@
 
 ## 1. 创建并发布 Bot
 
-在 Coze 工作台创建并发布一个可通过 API 调用的 Bot，记录 Bot ID，并给访问令牌开通 `chat` 和 `listMessage` 权限。请以 Coze 官方文档为准：
+在 Coze 工作台创建并发布一个可通过 API 调用的 Bot，记录 Bot ID，并给访问令牌开通 `chat`、`getChat` 和 `listMessage` 权限。当前实现实际使用发起对话、查询对话状态和读取消息三个 v3 操作；请以 Coze 官方文档显示的最新权限名称和接口为准：
 
 - [发起对话 API](https://docs.coze.cn/developer_guides_chat_v3)
 - [查看对话消息详情 API](https://docs.coze.cn/developer_guides_list_chat_messages)
@@ -27,8 +27,8 @@ COZE_TOKEN=你的服务端Token
 后端只会把已发布的企业知识拼入 `additional_messages`，并使用 `stream: false`。非流式调用会：
 
 1. 记录 Coze 返回的 `conversation_id` 和 `chat_id`；
-2. 按官方建议轮询 `retrieve`，最多等待约 30 秒；
-3. 读取消息列表，只接受 `role=assistant`、`type=answer`、文本类型的消息；
+2. 按官方建议调用 `GET /chat/retrieve`（对应 getChat 权限）轮询，整个请求最多等待 30 秒；
+3. 调用 `GET /chat/message/list`（对应 listMessage 权限），只接受结构完整的 `role=assistant`、`type=answer`、文本类型消息，并合并所有 answer 片段；
 4. 忽略 `verbose`、`follow_up`、工具调用和用户消息；
 5. 把知识文档 ID、标题和版本写入 AI 运行证据，把用量写入 `ai_runs.usage`。
 

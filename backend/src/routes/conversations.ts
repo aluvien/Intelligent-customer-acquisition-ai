@@ -4,7 +4,7 @@ import { randomId } from '../config';
 import { AppError } from '../errors';
 import { broadcast } from '../realtime/hub';
 import { insertJob } from '../jobs/worker';
-import { optionalText, pageParams, requireText, tenantId } from './helpers';
+import { encodeMessageCursor, optionalText, pageParams, parseMessageCursor, requireText, tenantId } from './helpers';
 import { requireRole } from '../middleware/auth';
 import { assertContentAllowed } from '../services/contentAudit';
 
@@ -106,14 +106,15 @@ router.get('/:id/messages', async (req, res, next) => {
   try {
     const tenant = tenantId(req);
     await getConversation(req.params.id, tenant);
-    const beforeRaw = typeof req.query.before === 'string' ? req.query.before : undefined;
-    const before = beforeRaw ? new Date(beforeRaw) : undefined;
-    if (beforeRaw && (!before || Number.isNaN(before.getTime()))) throw new AppError(400, 'INVALID_CURSOR', '消息游标无效');
+    const before = parseMessageCursor(typeof req.query.before === 'string' ? req.query.before : undefined);
     const values: unknown[] = [req.params.id, tenant];
-    const cursorFilter = before ? ' AND created_at < $3' : '';
-    if (before) values.push(before.toISOString());
-    const result = await query(`SELECT * FROM (SELECT id, conversation_id AS "conversationId", direction, sender_type AS "senderType", message_type AS "messageType", content, delivery_status AS "deliveryStatus", metadata, created_at AS "createdAt" FROM messages WHERE conversation_id = $1 AND tenant_id = $2${cursorFilter} ORDER BY created_at DESC LIMIT 500) recent ORDER BY "createdAt" ASC`, values);
-    res.json({ success: true, message: '获取消息记录成功', data: { messages: result.rows, pagination: { hasMore: result.rowCount === 500, nextBefore: result.rows.length === 500 ? new Date(result.rows[0].createdAt).toISOString() : null } } });
+    const cursorFilter = before
+      ? before.id ? ' AND (created_at < $3 OR (created_at = $3 AND id < $4))' : ' AND created_at < $3'
+      : '';
+    if (before) values.push(before.createdAt.toISOString());
+    if (before?.id) values.push(before.id);
+    const result = await query(`SELECT * FROM (SELECT id, conversation_id AS "conversationId", direction, sender_type AS "senderType", message_type AS "messageType", content, delivery_status AS "deliveryStatus", metadata, created_at AS "createdAt" FROM messages WHERE conversation_id = $1 AND tenant_id = $2${cursorFilter} ORDER BY created_at DESC, id DESC LIMIT 500) recent ORDER BY "createdAt" ASC, id ASC`, values);
+    res.json({ success: true, message: '获取消息记录成功', data: { messages: result.rows, pagination: { hasMore: result.rowCount === 500, nextBefore: result.rowCount === 500 && result.rows[0] ? encodeMessageCursor(result.rows[0].createdAt, result.rows[0].id) : null } } });
   } catch (error) { next(error); }
 });
 
@@ -131,7 +132,10 @@ router.post('/:id/messages', requireRole('admin', 'operator'), async (req, res, 
       if (!conversation) throw new AppError(404, 'CONVERSATION_NOT_FOUND', '对话不存在');
       if (conversation.status === 'closed') throw new AppError(409, 'CONVERSATION_CLOSED', '对话已关闭');
       const existing = await client.query<{ id: string; content: string; delivery_status: string }>('SELECT id, content, delivery_status FROM messages WHERE tenant_id = $1 AND conversation_id = $2 AND external_message_id = $3', [tenant, conversation.id, externalMessageId]);
-      if (existing.rows[0]) return { messageId: existing.rows[0].id, text: existing.rows[0].content, deliveryStatus: existing.rows[0].delivery_status, duplicate: true };
+      if (existing.rows[0]) {
+        if (existing.rows[0].content !== content) throw new AppError(409, 'IDEMPOTENCY_KEY_REUSED', 'Idempotency-Key 已用于另一条人工回复');
+        return { messageId: existing.rows[0].id, text: existing.rows[0].content, deliveryStatus: existing.rows[0].delivery_status, duplicate: true };
+      }
       const messageId = randomId();
       await client.query(`INSERT INTO messages(id, tenant_id, conversation_id, external_message_id, direction, sender_type, message_type, content, delivery_status, metadata) VALUES ($1, $2, $3, $4, 'outbound', 'human', 'web_message', $5, 'queued', $6::jsonb)`, [messageId, tenant, conversation.id, externalMessageId, content, JSON.stringify({ userId: req.auth!.userId, idempotencyKey })]);
       await client.query(`UPDATE conversations SET last_message_at = NOW(), message_count = message_count + 1, updated_at = NOW() WHERE id = $1 AND tenant_id = $2`, [conversation.id, tenant]);
@@ -158,10 +162,13 @@ router.post('/:id/drafts/:aiRunId/approve', requireRole('admin', 'operator'), as
       const conversation = await client.query<{ status: string; mode: string; widget_id: string | null }>('SELECT status, mode, widget_id FROM conversations WHERE id = $1 AND tenant_id = $2 FOR UPDATE', [req.params.id, tenant]);
       if (!conversation.rows[0] || conversation.rows[0].status === 'closed') throw new AppError(409, 'CONVERSATION_CLOSED', '对话已关闭');
       const externalMessageId = `ai-approval:${req.params.aiRunId}`;
-      const existing = await client.query<{ id: string; content: string; delivery_status: string }>('SELECT id, content, delivery_status FROM messages WHERE tenant_id = $1 AND conversation_id = $2 AND external_message_id = $3', [tenant, req.params.id, externalMessageId]);
-      if (existing.rows[0]) return { messageId: existing.rows[0].id, text: existing.rows[0].content, deliveryStatus: existing.rows[0].delivery_status, duplicate: true };
-      const messageId = randomId();
+      const existing = await client.query<{ id: string; content: string; delivery_status: string }>(`SELECT id, content, delivery_status FROM messages WHERE tenant_id = $1 AND conversation_id = $2 AND (external_message_id = $3 OR metadata->>'aiRunId' = $4 OR metadata->>'approvedAiRunId' = $4)`, [tenant, req.params.id, externalMessageId, req.params.aiRunId]);
       const text = content || run.rows[0].draft!;
+      if (existing.rows[0]) {
+        if (existing.rows[0].content !== text) throw new AppError(409, 'DRAFT_ALREADY_PUBLISHED', '该 AI 草稿已经发布了不同内容');
+        return { messageId: existing.rows[0].id, text: existing.rows[0].content, deliveryStatus: existing.rows[0].delivery_status, duplicate: true };
+      }
+      const messageId = randomId();
       await client.query(`INSERT INTO messages(id, tenant_id, conversation_id, external_message_id, direction, sender_type, message_type, content, delivery_status, metadata) VALUES ($1, $2, $3, $4, 'outbound', 'human', 'web_message', $5, 'queued', $6::jsonb)`, [messageId, tenant, req.params.id, externalMessageId, text, JSON.stringify({ approvedAiRunId: req.params.aiRunId, userId: req.auth!.userId, idempotencyKey })]);
       await client.query(`UPDATE conversations SET last_message_at = NOW(), message_count = message_count + 1, updated_at = NOW() WHERE id = $1`, [req.params.id]);
       await insertJob(client, tenant, conversation.rows[0].widget_id ? 'web_delivery' : 'platform_delivery', { conversationId: req.params.id, messageId }, conversation.rows[0].widget_id ? 3 : 1);

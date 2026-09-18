@@ -33,11 +33,19 @@ export async function insertJob(client: PoolClient, tenantId: string, type: Job[
 
 async function claimJob(): Promise<Job | undefined> {
   return withTransaction(async (client) => {
+    await client.query(
+      `UPDATE jobs
+          SET status = 'dead', locked_at = NULL, locked_by = NULL,
+              last_error = COALESCE(last_error, '任务租约耗尽重试次数'), updated_at = NOW()
+        WHERE status = 'running' AND locked_at < NOW() - INTERVAL '2 minutes'
+          AND attempts >= max_attempts`,
+    );
     const result = await client.query<Job>(
       `WITH candidate AS (
          SELECT id FROM jobs
-          WHERE (status = 'queued' AND run_after <= NOW())
-             OR (status = 'running' AND locked_at < NOW() - INTERVAL '2 minutes')
+          WHERE ((status = 'queued' AND run_after <= NOW())
+             OR (status = 'running' AND locked_at < NOW() - INTERVAL '2 minutes'))
+            AND attempts < max_attempts
           ORDER BY run_after, created_at
           FOR UPDATE SKIP LOCKED LIMIT 1
        )
@@ -97,7 +105,7 @@ async function fail(job: Job, error: unknown): Promise<void> {
   const deterministicBlocked = job.type === 'ai_draft' && error instanceof AppError && ['AI_NOT_CONFIGURED', 'AI_PROVIDER_UNSUPPORTED', 'AI_KNOWLEDGE_REQUIRED', 'CONTENT_BLOCKED'].includes(error.code);
   const terminal = job.attempts >= job.max_attempts || deterministicBlocked;
   const delaySeconds = Math.min(300, 2 ** Math.max(0, job.attempts - 1) * 5);
-  if (job.type === 'platform_delivery' || job.type === 'web_delivery') {
+  if (job.type === 'platform_delivery') {
     const messageId = typeof job.payload.messageId === 'string' ? job.payload.messageId : '';
     if (messageId) await query(`UPDATE messages SET delivery_status = CASE WHEN $3 = 'PLATFORM_UNVERIFIED' THEN 'failed' ELSE 'unknown' END WHERE id = $1 AND tenant_id = $2 AND delivery_status IN ('queued', 'sending') AND EXISTS (SELECT 1 FROM jobs WHERE id = $4 AND status = 'running' AND locked_by = $5)`, [messageId, job.tenant_id, error instanceof AppError ? error.code : 'UNKNOWN', job.id, WORKER_ID]);
   }
@@ -176,28 +184,30 @@ async function processAiDraft(job: Job): Promise<void> {
   await assertLease(job);
   await query(`UPDATE ai_runs SET status = 'running' WHERE id = $1 AND tenant_id = $2`, [aiRunId, job.tenant_id]);
   try {
-    const draft = await generateDraft(job.tenant_id, conversationId, input.rows[0].content);
+    const draft = await generateDraft(job.tenant_id, conversationId, input.rows[0].content, aiRunId);
     try { assertContentAllowed(draft.text); } catch { throw new AppError(400, 'CONTENT_BLOCKED', 'AI 草稿包含被禁止的内容'); }
     await assertLease(job);
     await query(`UPDATE ai_runs SET status = 'running', draft = $2, evidence = $3::jsonb, provider_request_id = $4, provider_conversation_id = $5, usage = $6::jsonb, error = NULL WHERE id = $1 AND tenant_id = $7`, [aiRunId, draft.text, JSON.stringify(draft.evidence), draft.providerRequestId || null, draft.providerConversationId || null, draft.usage ? JSON.stringify(draft.usage) : null, job.tenant_id]);
+    let autoPublished = false;
     if (draft.text) {
       const queuedModeVersion = Number(job.payload.modeVersion || 0);
-      await withTransaction(async (client) => {
+      autoPublished = Boolean(await withTransaction(async (client) => {
         await assertLeaseOnClient(client, job);
         const locked = await client.query<{ mode: 'human' | 'ai_draft' | 'auto'; mode_version: number; widget_id: string | null }>('SELECT mode, mode_version, widget_id FROM conversations WHERE id = $1 AND tenant_id = $2 FOR UPDATE', [conversationId, job.tenant_id]);
         if (!locked.rows[0] || locked.rows[0].mode !== 'auto' || !locked.rows[0].widget_id) return undefined;
         if (queuedModeVersion > 0 && locked.rows[0].mode_version !== queuedModeVersion) return undefined;
-        const existing = await client.query<{ id: string }>(`SELECT id FROM messages WHERE tenant_id = $1 AND conversation_id = $2 AND direction = 'outbound' AND sender_type = 'ai' AND metadata->>'aiRunId' = $3 LIMIT 1`, [job.tenant_id, conversationId, aiRunId]);
-        if (existing.rows[0]) return;
+        const existing = await client.query<{ id: string }>(`SELECT id FROM messages WHERE tenant_id = $1 AND conversation_id = $2 AND direction = 'outbound' AND (metadata->>'aiRunId' = $3 OR metadata->>'approvedAiRunId' = $3) LIMIT 1`, [job.tenant_id, conversationId, aiRunId]);
+        if (existing.rows[0]) return true;
         const id = randomId();
         await client.query(`INSERT INTO messages(id, tenant_id, conversation_id, direction, sender_type, message_type, content, delivery_status, metadata) VALUES ($1, $2, $3, 'outbound', 'ai', 'web_message', $4, 'queued', $5::jsonb)`, [id, job.tenant_id, conversationId, draft.text, JSON.stringify({ aiRunId, modeVersion: queuedModeVersion })]);
         await client.query(`UPDATE conversations SET last_message_at = NOW(), message_count = message_count + 1, updated_at = NOW() WHERE id = $1`, [conversationId]);
         await insertJob(client, job.tenant_id, 'web_delivery', { conversationId, messageId: id, modeVersion: queuedModeVersion });
-      });
+        return true;
+      }));
     }
     await assertLease(job);
     await query(`UPDATE ai_runs SET status = 'succeeded', completed_at = NOW() WHERE id = $1 AND tenant_id = $2`, [aiRunId, job.tenant_id]);
-    broadcast(job.tenant_id, { type: 'ai_draft', data: { aiRunId, conversationId, messageId, draft: draft.text, evidence: draft.evidence }, timestamp: new Date().toISOString() });
+    if (!autoPublished) broadcast(job.tenant_id, { type: 'ai_draft', data: { aiRunId, conversationId, messageId, draft: draft.text, evidence: draft.evidence }, timestamp: new Date().toISOString() });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'AI 草稿生成失败';
     const blocked = error instanceof AppError && ['AI_NOT_CONFIGURED', 'AI_PROVIDER_UNSUPPORTED', 'AI_KNOWLEDGE_REQUIRED', 'CONTENT_BLOCKED'].includes(error.code);

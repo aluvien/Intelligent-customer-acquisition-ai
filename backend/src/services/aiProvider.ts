@@ -25,16 +25,18 @@ async function loadKnowledge(tenantId: string): Promise<KnowledgeDocument[]> {
   return result.rows;
 }
 
-function buildKnowledgeContext(knowledge: KnowledgeDocument[]): string {
+function buildKnowledgeContext(knowledge: KnowledgeDocument[]): { context: string; used: KnowledgeDocument[] } {
   const parts: string[] = [];
+  const used: KnowledgeDocument[] = [];
   let remaining = 50_000;
   for (const item of knowledge) {
     if (remaining <= 0) break;
     const content = item.content.slice(0, Math.min(item.content.length, remaining));
     parts.push(`【${item.title}（v${item.version}）】\n${content}`);
+    used.push(item);
     remaining -= content.length;
   }
-  return parts.join('\n\n') || '（暂无已发布知识）';
+  return { context: parts.join('\n\n') || '（暂无已发布知识）', used };
 }
 
 function dataRecord(body: CozeRecord): CozeRecord {
@@ -76,7 +78,7 @@ function completedStatus(status: string): boolean {
 }
 
 function failedStatus(status: string): boolean {
-  return status === 'failed' || status === 'error' || status === 'cancelled';
+  return status === 'failed' || status === 'error' || status === 'cancelled' || status === 'canceled';
 }
 
 function sleep(milliseconds: number): Promise<void> {
@@ -96,7 +98,7 @@ export function extractCozeText(body: CozeRecord): string {
     const role = String(record.role || '').toLowerCase();
     const type = String(record.type || '').toLowerCase();
     const contentType = String(record.content_type || record.contentType || '').toLowerCase();
-    if (role === 'assistant' && (type === 'answer' || (!type && contentType === 'text')) && contentType !== 'card' && typeof record.content === 'string' && record.content.trim()) {
+    if (role === 'assistant' && type === 'answer' && contentType === 'text' && typeof record.content === 'string' && record.content.trim()) {
       answers.push(record.content.trim());
     }
     if (record.messages) visit(record.messages);
@@ -104,25 +106,31 @@ export function extractCozeText(body: CozeRecord): string {
   };
   visit(body.data);
   visit(body.messages);
-  return answers.length ? answers[answers.length - 1] : '';
+  return answers.join('\n\n');
 }
 
 function extractUsage(...bodies: CozeRecord[]): Record<string, unknown> | undefined {
-  for (const body of bodies) {
+  for (const body of [...bodies].reverse()) {
     const nested = dataRecord(body);
     const usage = body.usage || nested.usage;
-    if (usage && typeof usage === 'object' && !Array.isArray(usage)) return usage as Record<string, unknown>;
+    if (usage && typeof usage === 'object' && !Array.isArray(usage) && Object.keys(usage).length > 0) return usage as Record<string, unknown>;
   }
   return undefined;
 }
 
-async function generateWithCoze(tenantId: string, question: string, conversationId: string, knowledge: KnowledgeDocument[]): Promise<DraftResult> {
+async function generateWithCoze(tenantId: string, question: string, conversationId: string, knowledge: KnowledgeDocument[], aiRunId?: string): Promise<DraftResult> {
   if (knowledge.length === 0) throw new AppError(409, 'AI_KNOWLEDGE_REQUIRED', '请先发布企业知识，再生成 AI 草稿');
   const token = process.env.COZE_TOKEN?.trim();
   const botId = process.env.COZE_BOT_ID?.trim();
   const baseUrl = (process.env.COZE_API_URL || '').trim().replace(/\/$/, '');
   if (!token || !botId || !baseUrl) throw new AppError(503, 'AI_NOT_CONFIGURED', 'AI 供应商未配置，无法生成草稿');
 
+  const currentRun = aiRunId ? await query<{ provider_request_id: string | null; provider_conversation_id: string | null }>(
+    `SELECT provider_request_id, provider_conversation_id FROM ai_runs WHERE id = $1 AND tenant_id = $2`,
+    [aiRunId, tenantId],
+  ) : { rows: [] } as { rows: Array<{ provider_request_id: string | null; provider_conversation_id: string | null }> };
+  const resumeChatId = currentRun.rows[0]?.provider_request_id || '';
+  const resumeConversationId = currentRun.rows[0]?.provider_conversation_id || '';
   const previous = await query<{ provider_conversation_id: string }>(
     `SELECT provider_conversation_id
        FROM ai_runs
@@ -131,49 +139,75 @@ async function generateWithCoze(tenantId: string, question: string, conversation
     [tenantId, conversationId],
   );
   const previousConversationId = previous.rows[0]?.provider_conversation_id;
+  const knowledgeContext = buildKnowledgeContext(knowledge);
   const prompt = [
     '你是企业客服草稿助手，只能依据提供的企业知识回答。',
     '知识不足时明确要求人工接管，不得编造价格、库存、优惠、联系方式或承诺。',
-    `企业知识：\n${buildKnowledgeContext(knowledge)}`,
+    `企业知识：\n${knowledgeContext.context}`,
     `客户问题：\n${question}`,
   ].join('\n\n');
 
-  const response = await axios.post(`${baseUrl}/chat`, {
-    bot_id: botId,
-    user_id: `conversation:${conversationId}`,
-    stream: false,
-    auto_save_history: true,
-    additional_messages: [{ role: 'user', type: 'question', content: prompt, content_type: 'text' }],
-  }, {
-    timeout: 20_000,
-    params: previousConversationId ? { conversation_id: previousConversationId } : undefined,
-    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-    validateStatus: () => true,
-  });
-  const initialBody = assertCozeResponse(response, '发起对话');
-  let meta = extractChatMeta(initialBody);
-  let retrieveBody: CozeRecord = initialBody;
+  let meta = { conversationId: resumeConversationId, chatId: resumeChatId, status: '', usage: undefined as Record<string, unknown> | undefined };
+  let initialBody: CozeRecord = {};
+  let retrieveBody: CozeRecord = {};
   let messagesBody: CozeRecord | undefined;
-  let finalText = extractCozeText(initialBody);
+  let finalText = '';
+
+  if (!resumeChatId || !resumeConversationId) {
+    const response = await axios.post(`${baseUrl}/chat`, {
+      bot_id: botId,
+      user_id: `conversation:${conversationId}`,
+      stream: false,
+      auto_save_history: true,
+      additional_messages: [{ role: 'user', type: 'question', content: prompt, content_type: 'text' }],
+    }, {
+      timeout: 20_000,
+      params: previousConversationId ? { conversation_id: previousConversationId } : undefined,
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      validateStatus: () => true,
+    });
+    initialBody = assertCozeResponse(response, '发起对话');
+    const initialMeta = extractChatMeta(initialBody);
+    meta = {
+      conversationId: initialMeta.conversationId || meta.conversationId,
+      chatId: initialMeta.chatId || meta.chatId,
+      status: initialMeta.status,
+      usage: initialMeta.usage,
+    };
+    if (aiRunId && meta.chatId && meta.conversationId) {
+      await query(`UPDATE ai_runs SET provider_request_id = $1, provider_conversation_id = $2 WHERE id = $3 AND tenant_id = $4`, [meta.chatId, meta.conversationId, aiRunId, tenantId]);
+    }
+    finalText = extractCozeText(initialBody);
+  }
 
   if (!finalText) {
     if (!meta.conversationId || !meta.chatId) throw new AppError(502, 'AI_PROVIDER_INCOMPLETE', 'Coze 未返回可查询的 conversation_id/chat_id');
-    for (let attempt = 0; attempt < 30; attempt += 1) {
+    const deadline = Date.now() + 30_000;
+    for (;;) {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) throw new AppError(502, 'AI_PROVIDER_TIMEOUT', 'Coze 对话在规定时间内未完成');
       const statusResponse = await axios.get(`${baseUrl}/chat/retrieve`, {
-        timeout: 10_000,
+        timeout: Math.min(10_000, remaining),
         params: { conversation_id: meta.conversationId, chat_id: meta.chatId },
         headers: { Authorization: `Bearer ${token}` },
         validateStatus: () => true,
       });
       retrieveBody = assertCozeResponse(statusResponse, '查询对话状态');
-      meta = extractChatMeta(retrieveBody);
+      const nextMeta = extractChatMeta(retrieveBody);
+      meta = {
+        conversationId: nextMeta.conversationId || meta.conversationId,
+        chatId: nextMeta.chatId || meta.chatId,
+        status: nextMeta.status || meta.status,
+        usage: nextMeta.usage || meta.usage,
+      };
       if (failedStatus(meta.status)) throw new AppError(502, 'AI_PROVIDER_INCOMPLETE', 'Coze 对话执行失败');
       if (completedStatus(meta.status)) break;
-      if (attempt === 29) throw new AppError(502, 'AI_PROVIDER_TIMEOUT', 'Coze 对话在规定时间内未完成');
-      await sleep(1000);
+      await sleep(Math.min(1000, Math.max(0, deadline - Date.now())));
     }
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) throw new AppError(502, 'AI_PROVIDER_TIMEOUT', 'Coze 对话在规定时间内未完成');
     const messagesResponse = await axios.get(`${baseUrl}/chat/message/list`, {
-      timeout: 10_000,
+      timeout: Math.min(10_000, remaining),
       params: { conversation_id: meta.conversationId, chat_id: meta.chatId },
       headers: { Authorization: `Bearer ${token}` },
       validateStatus: () => true,
@@ -184,16 +218,16 @@ async function generateWithCoze(tenantId: string, question: string, conversation
   if (!finalText.trim()) throw new AppError(502, 'AI_EMPTY_RESPONSE', 'Coze 未返回可用的 assistant answer');
   return {
     text: finalText.trim(),
-    evidence: knowledge.map(({ id, title, version }) => ({ documentId: id, title, version })),
+    evidence: knowledgeContext.used.map(({ id, title, version }) => ({ documentId: id, title, version })),
     providerRequestId: meta.chatId || undefined,
     providerConversationId: meta.conversationId || undefined,
     usage: extractUsage(initialBody, retrieveBody, messagesBody || {}),
   };
 }
 
-export async function generateDraft(tenantId: string, conversationId: string, question: string): Promise<DraftResult> {
+export async function generateDraft(tenantId: string, conversationId: string, question: string, aiRunId?: string): Promise<DraftResult> {
   const knowledge = await loadKnowledge(tenantId);
   const provider = (process.env.AI_PROVIDER || 'coze').trim().toLowerCase();
   if (provider !== 'coze') throw new AppError(503, 'AI_PROVIDER_UNSUPPORTED', '当前只实现已配置的 Coze 供应商');
-  return generateWithCoze(tenantId, question, conversationId, knowledge);
+  return generateWithCoze(tenantId, question, conversationId, knowledge, aiRunId);
 }

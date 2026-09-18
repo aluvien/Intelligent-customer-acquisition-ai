@@ -1,6 +1,6 @@
 import express from 'express';
 import { query, withTransaction } from '../db';
-import { randomId } from '../config';
+import { config, randomId } from '../config';
 import { AppError } from '../errors';
 import { insertJob } from '../jobs/worker';
 import { requireRole } from '../middleware/auth';
@@ -82,16 +82,34 @@ router.post('/draft', requireRole('admin', 'operator'), async (req, res, next) =
     const messageId = requireText(req.body?.messageId, 'messageId', 100);
     const tenant = tenantId(req);
     const result = await withTransaction(async (client) => {
-      const conversation = await client.query<{ id: string; mode_version: number }>('SELECT id, mode_version FROM conversations WHERE id = $1 AND tenant_id = $2 FOR SHARE', [conversationId, tenant]);
+      const conversation = await client.query<{ id: string; mode_version: number }>('SELECT id, mode_version FROM conversations WHERE id = $1 AND tenant_id = $2 FOR UPDATE', [conversationId, tenant]);
       if (!conversation.rowCount) throw new AppError(404, 'CONVERSATION_NOT_FOUND', '对话不存在');
       const message = await client.query<{ id: string }>('SELECT id FROM messages WHERE id = $1 AND conversation_id = $2 AND tenant_id = $3 AND direction = \'inbound\'', [messageId, conversationId, tenant]);
       if (!message.rowCount) throw new AppError(404, 'MESSAGE_NOT_FOUND', 'AI 输入消息不存在或不属于该对话');
+      const existing = await client.query<{ id: string; status: string }>(
+        `SELECT id, status FROM ai_runs
+          WHERE tenant_id = $1 AND conversation_id = $2 AND message_id = $3
+            AND status IN ('queued', 'running', 'succeeded')
+          ORDER BY created_at DESC LIMIT 1 FOR UPDATE`,
+        [tenant, conversationId, messageId],
+      );
+      if (existing.rows[0]) return { aiRunId: existing.rows[0].id, status: existing.rows[0].status, duplicate: true };
+      const recent = await client.query<{ count: string }>(
+        `SELECT COUNT(*)::text AS count FROM ai_runs
+          WHERE tenant_id = $1 AND conversation_id = $2 AND created_at >= NOW() - INTERVAL '1 hour'`,
+        [tenant, conversationId],
+      );
       const aiRunId = randomId();
+      if (Number(recent.rows[0]?.count || 0) >= config.aiMaxRunsPerConversationHour) {
+        await client.query(`INSERT INTO ai_runs(id, tenant_id, conversation_id, message_id, provider, status, error, completed_at) VALUES ($1, $2, $3, $4, $5, 'blocked', $6, NOW())`, [aiRunId, tenant, conversationId, messageId, process.env.AI_PROVIDER || 'coze', 'AI_MAX_RUNS_EXCEEDED']);
+        return { aiRunId, status: 'blocked', duplicate: false };
+      }
       await client.query(`INSERT INTO ai_runs(id, tenant_id, conversation_id, message_id, provider, status) VALUES ($1, $2, $3, $4, $5, 'queued')`, [aiRunId, tenant, conversationId, messageId, process.env.AI_PROVIDER || 'coze']);
       await insertJob(client, tenant, 'ai_draft', { conversationId, messageId, aiRunId, modeVersion: conversation.rows[0].mode_version });
-      return { aiRunId };
+      return { aiRunId, status: 'queued', duplicate: false };
     });
-    res.status(202).json({ success: true, message: 'AI 草稿任务已创建', data: { aiRunId: result.aiRunId, status: 'queued' } });
+    const statusCode = result.status === 'blocked' ? 429 : result.duplicate ? 200 : 202;
+    res.status(statusCode).json({ success: true, message: result.status === 'blocked' ? '该对话已达到 AI 生成频率上限' : result.duplicate ? '已返回此前的 AI 草稿任务' : 'AI 草稿任务已创建', data: { aiRunId: result.aiRunId, status: result.status } });
   } catch (error) { next(error); }
 });
 

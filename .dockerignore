@@ -6,3 +6,12 @@ build
 logs
 *.log
 docs/rebuild
+frontend
+backend
+docs
+*.md
+*.sh
+*.yml
+*.yaml
+*.json
+*.lock
