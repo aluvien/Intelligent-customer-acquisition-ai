@@ -111,10 +111,11 @@ router.get('/:id/messages', async (req, res, next) => {
     const cursorFilter = before
       ? before.id ? ' AND (created_at < $3 OR (created_at = $3 AND id < $4))' : ' AND created_at < $3'
       : '';
-    if (before) values.push(before.createdAt.toISOString());
+    if (before) values.push(before.createdAt);
     if (before?.id) values.push(before.id);
-    const result = await query(`SELECT * FROM (SELECT id, conversation_id AS "conversationId", direction, sender_type AS "senderType", message_type AS "messageType", content, delivery_status AS "deliveryStatus", metadata, created_at AS "createdAt" FROM messages WHERE conversation_id = $1 AND tenant_id = $2${cursorFilter} ORDER BY created_at DESC, id DESC LIMIT 500) recent ORDER BY "createdAt" ASC, id ASC`, values);
-    res.json({ success: true, message: '获取消息记录成功', data: { messages: result.rows, pagination: { hasMore: result.rowCount === 500, nextBefore: result.rowCount === 500 && result.rows[0] ? encodeMessageCursor(result.rows[0].createdAt, result.rows[0].id) : null } } });
+    const result = await query(`SELECT * FROM (SELECT id, conversation_id AS "conversationId", direction, sender_type AS "senderType", message_type AS "messageType", content, delivery_status AS "deliveryStatus", metadata, created_at AS "createdAt", created_at::text AS "cursorCreatedAt" FROM messages WHERE conversation_id = $1 AND tenant_id = $2${cursorFilter} ORDER BY created_at DESC, id DESC LIMIT 500) recent ORDER BY "createdAt" ASC, id ASC`, values);
+    const rows = result.rows.map(({ cursorCreatedAt: _cursorCreatedAt, ...row }) => row);
+    res.json({ success: true, message: '获取消息记录成功', data: { messages: rows, pagination: { hasMore: result.rowCount === 500, nextBefore: result.rowCount === 500 && result.rows[0] ? encodeMessageCursor(result.rows[0].cursorCreatedAt, result.rows[0].id) : null } } });
   } catch (error) { next(error); }
 });
 

@@ -83,6 +83,13 @@ async function createSession(user: UserRow): Promise<{ token: string; refreshTok
       [user.id, user.tenant_id],
     );
     if (!current.rows[0]) throw new AppError(403, 'ACCOUNT_DISABLED', '账户或企业已被禁用');
+    // The password check happens before this transaction. Reject a login whose
+    // credential snapshot changed while the transaction waited for the user
+    // lock; otherwise an old password check could mint a token from the new
+    // auth version after a concurrent password change.
+    if (current.rows[0].auth_version !== user.auth_version || current.rows[0].password_hash !== user.password_hash) {
+      throw new AppError(401, 'INVALID_LOGIN', '用户名或密码错误');
+    }
     await client.query(
       `INSERT INTO auth_sessions(id, user_id, tenant_id, family_id, refresh_token_hash, expires_at)
        VALUES ($1, $2, $3, $4, $5, NOW() + ($6 || ' days')::interval)`,

@@ -49,6 +49,8 @@ const ActiveConversations: React.FC = () => {
   const messageIds = useRef<Set<string>>(new Set());
   const conversationIds = useRef<Set<string>>(new Set());
   const pendingMessageKey = useRef<{ key: string; content: string } | null>(null);
+  const selectedConversationId = useRef<string | null>(null);
+  const inputRevision = useRef(0);
   const messageRequestId = useRef(0);
 
   const loadConversations = useCallback(async () => {
@@ -71,6 +73,7 @@ const ActiveConversations: React.FC = () => {
     if (!before) {
       pendingMessageKey.current = null;
       messageIds.current = new Set();
+      selectedConversationId.current = conversation.id;
       setSelected(conversation);
       setDetailLoading(true);
     }
@@ -172,6 +175,8 @@ const ActiveConversations: React.FC = () => {
   const send = async () => {
     if (!selected || !content.trim()) return;
     const messageContent = content.trim();
+    const conversationId = selected.id;
+    const submittedRevision = inputRevision.current;
     const pending = pendingMessageKey.current?.content === messageContent
       ? pendingMessageKey.current
       : { key: crypto.randomUUID(), content: messageContent };
@@ -179,9 +184,9 @@ const ActiveConversations: React.FC = () => {
     try {
       const response = await api.post(`/conversations/${selected.id}/messages`, { content: messageContent }, { headers: { 'Idempotency-Key': pending.key } });
       if (pendingMessageKey.current?.key === pending.key) pendingMessageKey.current = null;
-      setContent('');
+      if (inputRevision.current === submittedRevision && selectedConversationId.current === conversationId) setContent('');
       message.success(response.data.message || '回复已进入发送队列');
-      await loadMessages(selected);
+      if (selectedConversationId.current === conversationId) await loadMessages(selected);
     } catch (err: any) {
       message.error(err?.response?.data?.message || '回复发送失败');
     }
@@ -226,7 +231,7 @@ const ActiveConversations: React.FC = () => {
           {selectedDrafts.map((draft) => <Alert key={draft.aiRunId} type="info" showIcon style={{ marginBottom: 12 }} message="AI 草稿（需人工批准）" description={<><Input.TextArea value={draft.draft} onChange={(event) => setDrafts((items) => ({ ...items, [draft.aiRunId]: { ...draft, draft: event.target.value } }))} autoSize={{ minRows: 2, maxRows: 5 }} /><Button type="primary" style={{ marginTop: 8 }} onClick={() => void approveDraft(draft)}>批准并发送</Button></>} />)}
           {historyHasMore && <Button loading={loadingOlder} onClick={() => void loadOlder()} style={{ marginBottom: 8 }}>加载更早消息</Button>}
           <div style={{ height: 420, overflowY: 'auto', padding: '8px 0' }}>{messages.map((item) => <div key={item.id} style={{ display: 'flex', justifyContent: item.direction === 'outbound' ? 'flex-end' : 'flex-start', marginBottom: 12 }}><div style={{ maxWidth: '72%', padding: '10px 12px', borderRadius: 10, background: item.direction === 'outbound' ? BUSINESS_THEME.primary : '#f4f6f8', color: item.direction === 'outbound' ? '#fff' : '#1A2332' }}><div>{item.content}</div><Typography.Text style={{ fontSize: 11, color: item.direction === 'outbound' ? 'rgba(255,255,255,.75)' : '#778' }}>{new Date(item.createdAt).toLocaleString()} · {item.deliveryStatus}</Typography.Text></div></div>)}</div>
-          <Space.Compact style={{ width: '100%' }}><Input.TextArea autoSize={{ minRows: 2, maxRows: 5 }} value={content} onChange={(event) => setContent(event.target.value)} onPressEnter={(event) => { if (!event.shiftKey) { event.preventDefault(); void send(); } }} placeholder="输入人工回复，Enter 发送，Shift+Enter 换行" /><Button type="primary" icon={<SendOutlined />} onClick={() => void send()}>发送</Button></Space.Compact>
+          <Space.Compact style={{ width: '100%' }}><Input.TextArea autoSize={{ minRows: 2, maxRows: 5 }} value={content} onChange={(event) => { inputRevision.current += 1; setContent(event.target.value); }} onPressEnter={(event) => { if (!event.shiftKey) { event.preventDefault(); void send(); } }} placeholder="输入人工回复，Enter 发送，Shift+Enter 换行" /><Button type="primary" icon={<SendOutlined />} onClick={() => void send()}>发送</Button></Space.Compact>
         </>}
       </Card>
     </div>

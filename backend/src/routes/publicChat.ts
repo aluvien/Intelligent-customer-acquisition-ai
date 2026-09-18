@@ -59,18 +59,18 @@ router.get('/sessions/:sessionId/messages', async (req, res, next) => {
       const cursorFilter = before
         ? before.id ? ` AND (created_at < $4 OR (created_at = $4 AND id < $5))` : ' AND created_at < $4'
         : '';
-      if (before) values.push(before.createdAt.toISOString());
+      if (before) values.push(before.createdAt);
       if (before?.id) values.push(before.id);
-      const result = await client.query(`SELECT id, conversation_id AS "conversationId", direction, sender_type AS "senderType", content, delivery_status AS "deliveryStatus", created_at AS "createdAt" FROM messages WHERE tenant_id = $1 AND conversation_id IN (SELECT id FROM conversations WHERE tenant_id = $1 AND widget_id = $2 AND external_user_id = $3) AND (direction = 'inbound' OR delivery_status IN ('provider_accepted', 'delivered'))${cursorFilter} ORDER BY created_at DESC, id DESC LIMIT 200`, values);
+      const result = await client.query(`SELECT id, conversation_id AS "conversationId", direction, sender_type AS "senderType", content, delivery_status AS "deliveryStatus", created_at AS "createdAt", created_at::text AS "cursorCreatedAt" FROM messages WHERE tenant_id = $1 AND conversation_id IN (SELECT id FROM conversations WHERE tenant_id = $1 AND widget_id = $2 AND external_user_id = $3) AND (direction = 'inbound' OR delivery_status IN ('provider_accepted', 'delivered'))${cursorFilter} ORDER BY created_at DESC, id DESC LIMIT 200`, values);
       const providerAcceptedIds = result.rows.filter((row) => row.deliveryStatus === 'provider_accepted').map((row) => row.id);
       if (providerAcceptedIds.length > 0) {
         await client.query(`UPDATE messages SET delivery_status = 'delivered' WHERE tenant_id = $1 AND id = ANY($2::text[]) AND delivery_status = 'provider_accepted'`, [context.tenantId, providerAcceptedIds]);
       }
-      const rows = result.rows.reverse().map((row) => providerAcceptedIds.includes(row.id) ? { ...row, deliveryStatus: 'delivered' } : row);
+      const rows = result.rows.reverse().map(({ cursorCreatedAt: _cursorCreatedAt, ...row }) => providerAcceptedIds.includes(row.id) ? { ...row, deliveryStatus: 'delivered' } : row);
       // `rows` is now oldest-to-newest after reverse(), so the first item is
       // the correct boundary for the next older page.
       const oldest = result.rows[0];
-      return { rows, hasMore: result.rowCount === 200, nextBefore: result.rowCount === 200 && oldest ? encodeMessageCursor(oldest.createdAt, oldest.id) : null };
+      return { rows, hasMore: result.rowCount === 200, nextBefore: result.rowCount === 200 && oldest ? encodeMessageCursor(oldest.cursorCreatedAt, oldest.id) : null };
     });
     res.json({ success: true, message: '获取消息成功', data: { messages: messages.rows, pagination: { hasMore: messages.hasMore, nextBefore: messages.nextBefore } } });
   } catch (error) { next(error); }

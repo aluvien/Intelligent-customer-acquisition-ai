@@ -86,14 +86,35 @@ router.post('/draft', requireRole('admin', 'operator'), async (req, res, next) =
       if (!conversation.rowCount) throw new AppError(404, 'CONVERSATION_NOT_FOUND', '对话不存在');
       const message = await client.query<{ id: string }>('SELECT id FROM messages WHERE id = $1 AND conversation_id = $2 AND tenant_id = $3 AND direction = \'inbound\'', [messageId, conversationId, tenant]);
       if (!message.rowCount) throw new AppError(404, 'MESSAGE_NOT_FOUND', 'AI 输入消息不存在或不属于该对话');
-      const existing = await client.query<{ id: string; status: string }>(
-        `SELECT id, status FROM ai_runs
-          WHERE tenant_id = $1 AND conversation_id = $2 AND message_id = $3
-            AND status IN ('queued', 'running', 'succeeded')
-          ORDER BY created_at DESC LIMIT 1 FOR UPDATE`,
+      const existing = await client.query<{ id: string; status: string; provider_state: string; has_job: boolean }>(
+        `SELECT r.id, r.status, r.provider_state,
+                EXISTS (
+                  SELECT 1 FROM jobs j
+                   WHERE j.tenant_id = r.tenant_id AND j.type = 'ai_draft'
+                     AND j.payload->>'aiRunId' = r.id AND j.status IN ('queued', 'running')
+                ) AS has_job
+           FROM ai_runs r
+          WHERE r.tenant_id = $1 AND r.conversation_id = $2 AND r.message_id = $3
+            AND (r.status IN ('queued', 'running', 'succeeded', 'failed') OR r.provider_state IN ('creating', 'unknown'))
+          ORDER BY CASE
+                     WHEN r.provider_state IN ('creating', 'unknown') THEN 0
+                     WHEN r.status IN ('queued', 'running', 'succeeded') THEN 1
+                     ELSE 2
+                   END, r.created_at DESC
+          LIMIT 1 FOR UPDATE`,
         [tenant, conversationId, messageId],
       );
-      if (existing.rows[0]) return { aiRunId: existing.rows[0].id, status: existing.rows[0].status, duplicate: true };
+      if (existing.rows[0]) {
+        if (['creating', 'unknown'].includes(existing.rows[0].provider_state)) throw new AppError(409, 'AI_PROVIDER_CREATION_UNKNOWN', '已有 AI 任务的 Coze 创建结果需要人工对账，不能自动重复发起');
+        if (existing.rows[0].status !== 'failed') return { aiRunId: existing.rows[0].id, status: existing.rows[0].status, duplicate: true };
+        if (!existing.rows[0].has_job) {
+          await client.query(`UPDATE ai_runs SET status = 'queued', error = NULL, completed_at = NULL WHERE id = $1 AND tenant_id = $2`, [existing.rows[0].id, tenant]);
+          await insertJob(client, tenant, 'ai_draft', { conversationId, messageId, aiRunId: existing.rows[0].id, modeVersion: conversation.rows[0].mode_version });
+        } else {
+          await client.query(`UPDATE ai_runs SET status = 'queued', completed_at = NULL WHERE id = $1 AND tenant_id = $2`, [existing.rows[0].id, tenant]);
+        }
+        return { aiRunId: existing.rows[0].id, status: 'queued', duplicate: true };
+      }
       const recent = await client.query<{ count: string }>(
         `SELECT COUNT(*)::text AS count FROM ai_runs
           WHERE tenant_id = $1 AND conversation_id = $2 AND created_at >= NOW() - INTERVAL '1 hour'`,

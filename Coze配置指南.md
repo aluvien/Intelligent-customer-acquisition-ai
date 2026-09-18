@@ -27,7 +27,7 @@ COZE_TOKEN=你的服务端Token
 后端只会把已发布的企业知识拼入 `additional_messages`，并使用 `stream: false`。非流式调用会：
 
 1. 记录 Coze 返回的 `conversation_id` 和 `chat_id`；
-2. 按官方建议调用 `GET /chat/retrieve`（对应 getChat 权限）轮询，整个请求最多等待 30 秒；
+2. 按官方建议调用 `GET /chat/retrieve`（对应 getChat 权限）轮询；创建完成后的查询与消息读取阶段共享最多 30 秒预算，初始创建请求另有独立超时；
 3. 调用 `GET /chat/message/list`（对应 listMessage 权限），只接受结构完整的 `role=assistant`、`type=answer`、文本类型消息，并合并所有 answer 片段；
 4. 忽略 `verbose`、`follow_up`、工具调用和用户消息；
 5. 把知识文档 ID、标题和版本写入 AI 运行证据，把用量写入 `ai_runs.usage`。

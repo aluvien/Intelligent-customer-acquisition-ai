@@ -25,6 +25,38 @@ async function loadKnowledge(tenantId: string): Promise<KnowledgeDocument[]> {
   return result.rows;
 }
 
+function parseKnowledgeSnapshot(value: unknown): KnowledgeDocument[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const snapshot = value.filter((item): item is KnowledgeDocument => {
+    if (!item || typeof item !== 'object') return false;
+    const row = item as Partial<KnowledgeDocument>;
+    return typeof row.id === 'string' && typeof row.title === 'string' && typeof row.content === 'string' && Number.isInteger(row.version);
+  });
+  if (snapshot.length !== value.length) throw new AppError(409, 'AI_KNOWLEDGE_SNAPSHOT_INVALID', 'AI 任务的知识快照无效，请重新创建任务');
+  return snapshot;
+}
+
+async function loadKnowledgeForRun(tenantId: string, aiRunId: string): Promise<KnowledgeDocument[]> {
+  const run = await query<{ knowledge_snapshot: unknown }>('SELECT knowledge_snapshot FROM ai_runs WHERE id = $1 AND tenant_id = $2', [aiRunId, tenantId]);
+  if (!run.rows[0]) throw new AppError(404, 'AI_RUN_NOT_FOUND', 'AI 任务不存在');
+  const snapshot = parseKnowledgeSnapshot(run.rows[0].knowledge_snapshot);
+  if (snapshot && snapshot.length > 0) return snapshot;
+  const current = await loadKnowledge(tenantId);
+  if (current.length === 0) throw new AppError(409, 'AI_KNOWLEDGE_REQUIRED', '请先发布企业知识，再生成 AI 草稿');
+  // Persist before the provider request. A retry therefore uses the exact
+  // documents and versions selected by the original attempt, even if the
+  // published knowledge changes while the provider is processing.
+  const persisted = await query<{ knowledge_snapshot: unknown }>(
+    `UPDATE ai_runs SET knowledge_snapshot = $1::jsonb
+       WHERE id = $2 AND tenant_id = $3 AND knowledge_snapshot = '[]'::jsonb
+     RETURNING knowledge_snapshot`,
+    [JSON.stringify(current), aiRunId, tenantId],
+  );
+  if (persisted.rows[0]) return parseKnowledgeSnapshot(persisted.rows[0].knowledge_snapshot) || current;
+  const latest = await query<{ knowledge_snapshot: unknown }>('SELECT knowledge_snapshot FROM ai_runs WHERE id = $1 AND tenant_id = $2', [aiRunId, tenantId]);
+  return parseKnowledgeSnapshot(latest.rows[0]?.knowledge_snapshot) || current;
+}
+
 function buildKnowledgeContext(knowledge: KnowledgeDocument[]): { context: string; used: KnowledgeDocument[] } {
   const parts: string[] = [];
   const used: KnowledgeDocument[] = [];
@@ -126,12 +158,19 @@ async function generateWithCoze(tenantId: string, question: string, conversation
   const baseUrl = (process.env.COZE_API_URL || '').trim().replace(/\/$/, '');
   if (!token || !botId || !baseUrl) throw new AppError(503, 'AI_NOT_CONFIGURED', 'AI 供应商未配置，无法生成草稿');
 
-  const currentRun = aiRunId ? await query<{ provider_request_id: string | null; provider_conversation_id: string | null }>(
-    `SELECT provider_request_id, provider_conversation_id FROM ai_runs WHERE id = $1 AND tenant_id = $2`,
+  const currentRun = aiRunId ? await query<{ provider_request_id: string | null; provider_conversation_id: string | null; provider_state: string }>(
+    `SELECT provider_request_id, provider_conversation_id, provider_state FROM ai_runs WHERE id = $1 AND tenant_id = $2`,
     [aiRunId, tenantId],
-  ) : { rows: [] } as { rows: Array<{ provider_request_id: string | null; provider_conversation_id: string | null }> };
+  ) : { rows: [] } as { rows: Array<{ provider_request_id: string | null; provider_conversation_id: string | null; provider_state: string }> };
   const resumeChatId = currentRun.rows[0]?.provider_request_id || '';
   const resumeConversationId = currentRun.rows[0]?.provider_conversation_id || '';
+  const providerState = currentRun.rows[0]?.provider_state || 'new';
+  if ((resumeChatId && !resumeConversationId) || (!resumeChatId && resumeConversationId)) {
+    throw new AppError(409, 'AI_PROVIDER_INCOMPLETE', 'Coze 会话标识不完整，不能安全恢复');
+  }
+  if (!resumeChatId && aiRunId && ['creating', 'unknown', 'completed'].includes(providerState)) {
+    throw new AppError(409, 'AI_PROVIDER_CREATION_UNKNOWN', 'Coze 创建结果未能安全落库，需要人工对账后再重试');
+  }
   const previous = await query<{ provider_conversation_id: string }>(
     `SELECT provider_conversation_id
        FROM ai_runs
@@ -157,6 +196,16 @@ async function generateWithCoze(tenantId: string, question: string, conversation
   let finalText = '';
 
   if (!resumeChatId || !resumeConversationId) {
+    if (aiRunId) {
+      const marked = await query(
+        `UPDATE ai_runs SET provider_state = 'creating'
+           WHERE id = $1 AND tenant_id = $2 AND provider_state = 'new'
+             AND provider_request_id IS NULL AND provider_conversation_id IS NULL
+         RETURNING id`,
+        [aiRunId, tenantId],
+      );
+      if (!marked.rowCount) throw new AppError(409, 'AI_PROVIDER_CREATION_UNKNOWN', 'Coze 创建结果未能安全落库，需要人工对账后再重试');
+    }
     const remaining = deadline - Date.now();
     if (remaining <= 0) throw new AppError(502, 'AI_PROVIDER_TIMEOUT', 'Coze 对话在规定时间内未完成');
     const response = await axios.post(`${baseUrl}/chat`, {
@@ -180,7 +229,8 @@ async function generateWithCoze(tenantId: string, question: string, conversation
       usage: initialMeta.usage,
     };
     if (aiRunId && meta.chatId && meta.conversationId) {
-      await query(`UPDATE ai_runs SET provider_request_id = $1, provider_conversation_id = $2 WHERE id = $3 AND tenant_id = $4`, [meta.chatId, meta.conversationId, aiRunId, tenantId]);
+      const savedProviderIds = await query(`UPDATE ai_runs SET provider_request_id = $1, provider_conversation_id = $2, provider_state = 'active' WHERE id = $3 AND tenant_id = $4 AND provider_state = 'creating'`, [meta.chatId, meta.conversationId, aiRunId, tenantId]);
+      if (!savedProviderIds.rowCount) throw new AppError(409, 'AI_PROVIDER_CREATION_UNKNOWN', 'Coze 创建结果未能安全落库，需要人工对账后再重试');
     }
     finalText = extractCozeText(initialBody);
   }
@@ -230,7 +280,8 @@ async function generateWithCoze(tenantId: string, question: string, conversation
 }
 
 export async function generateDraft(tenantId: string, conversationId: string, question: string, aiRunId?: string): Promise<DraftResult> {
-  const knowledge = await loadKnowledge(tenantId);
+  const knowledge = aiRunId ? await loadKnowledgeForRun(tenantId, aiRunId) : await loadKnowledge(tenantId);
+  if (knowledge.length === 0) throw new AppError(409, 'AI_KNOWLEDGE_REQUIRED', '请先发布企业知识，再生成 AI 草稿');
   const provider = (process.env.AI_PROVIDER || 'coze').trim().toLowerCase();
   if (provider !== 'coze') throw new AppError(503, 'AI_PROVIDER_UNSUPPORTED', '当前只实现已配置的 Coze 供应商');
   return generateWithCoze(tenantId, question, conversationId, knowledge, aiRunId);
