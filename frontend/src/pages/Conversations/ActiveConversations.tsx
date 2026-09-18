@@ -53,6 +53,7 @@ const ActiveConversations: React.FC = () => {
   const selectedConversationRef = useRef<Conversation | null>(null);
   const inputRevision = useRef(0);
   const messageRequestId = useRef(0);
+  const modeRequestId = useRef(0);
 
   const loadConversations = useCallback(async () => {
     setLoading(true);
@@ -74,6 +75,7 @@ const ActiveConversations: React.FC = () => {
     if (!before) {
       pendingMessageKey.current = null;
       messageIds.current = new Set();
+      modeRequestId.current += 1;
       selectedConversationId.current = conversation.id;
       selectedConversationRef.current = conversation;
       setSelected(conversation);
@@ -225,6 +227,27 @@ const ActiveConversations: React.FC = () => {
     }
   };
 
+  const changeMode = async (mode: string) => {
+    const target = selectedConversationRef.current;
+    if (!target) return;
+    const conversationId = target.id;
+    const requestId = ++modeRequestId.current;
+    try {
+      await api.put(`/conversations/${conversationId}/mode`, { mode });
+      if (requestId !== modeRequestId.current || selectedConversationId.current !== conversationId) return;
+      const current = selectedConversationRef.current;
+      if (!current || current.id !== conversationId) return;
+      const updated = { ...current, mode };
+      selectedConversationRef.current = updated;
+      setSelected((item) => item && item.id === conversationId ? { ...item, mode } : item);
+      await loadConversations();
+    } catch (err: any) {
+      if (requestId === modeRequestId.current && selectedConversationId.current === conversationId) {
+        message.error(err?.response?.data?.message || '会话模式更新失败');
+      }
+    }
+  };
+
   const selectedDrafts = selected ? Object.values(drafts).filter((draft) => draft.conversationId === selected.id) : [];
 
   return <div style={{ padding: '4px 0' }}>
@@ -236,7 +259,7 @@ const ActiveConversations: React.FC = () => {
           <List.Item.Meta avatar={<Badge dot={item.status === 'active'}><UserOutlined /></Badge>} title={<Space><span>{item.userNickname}</span><Tag>{item.mode === 'human' ? '人工' : item.mode === 'auto' ? '自动' : 'AI草稿'}</Tag></Space>} description={<Typography.Paragraph ellipsis={{ rows: 2 }} style={{ margin: 0 }}>{item.latestMessage?.content || '暂无消息'}<br /><Typography.Text type="secondary">{item.messageCount} 条 · {new Date(item.lastMessageAt).toLocaleString()}</Typography.Text></Typography.Paragraph>} />
         </List.Item>} />}
       </Card>
-      <Card title={selected ? `${selected.userNickname} · ${selected.status}` : '选择一个会话'} extra={selected && <Space><Button danger icon={<CloseCircleOutlined />} onClick={() => void close()} disabled={selected.status === 'closed'}>关闭</Button><Select value={selected.mode} onChange={async (mode) => { try { await api.put(`/conversations/${selected.id}/mode`, { mode }); setSelected({ ...selected, mode }); await loadConversations(); } catch (err: any) { message.error(err?.response?.data?.message || '会话模式更新失败'); } }} options={[{ value: 'human', label: '人工接管' }, { value: 'ai_draft', label: 'AI草稿' }, { value: 'auto', label: '自动回复（管理员）' }]} style={{ width: 150 }} /></Space>}>
+      <Card title={selected ? `${selected.userNickname} · ${selected.status}` : '选择一个会话'} extra={selected && <Space><Button danger icon={<CloseCircleOutlined />} onClick={() => { void close(); }} disabled={selected.status === 'closed'}>关闭</Button><Select value={selected.mode} onChange={(mode) => { void changeMode(mode); }} options={[{ value: 'human', label: '人工接管' }, { value: 'ai_draft', label: 'AI草稿' }, { value: 'auto', label: '自动回复（管理员）' }]} style={{ width: 150 }} /></Space>}>
         {!selected ? <Empty description="选择会话查看历史" /> : detailLoading ? <Spin /> : <>
           {selectedDrafts.map((draft) => <Alert key={draft.aiRunId} type="info" showIcon style={{ marginBottom: 12 }} message="AI 草稿（需人工批准）" description={<><Input.TextArea value={draft.draft} onChange={(event) => setDrafts((items) => ({ ...items, [draft.aiRunId]: { ...draft, draft: event.target.value } }))} autoSize={{ minRows: 2, maxRows: 5 }} /><Button type="primary" style={{ marginTop: 8 }} onClick={() => void approveDraft(draft)}>批准并发送</Button></>} />)}
           {historyHasMore && <Button loading={loadingOlder} onClick={() => void loadOlder()} style={{ marginBottom: 8 }}>加载更早消息</Button>}

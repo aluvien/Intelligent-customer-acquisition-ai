@@ -5,7 +5,24 @@ import { useParams } from 'react-router-dom';
 import api from '../services/api';
 
 type Session = { sessionId: string; token: string; visitorId: string; expiresAt?: number };
-type ChatMessage = { id: string; direction: 'inbound' | 'outbound'; senderType: string; content: string; deliveryStatus: string; createdAt: string };
+type ChatMessage = { id: string; direction: 'inbound' | 'outbound'; senderType: string; content: string; deliveryStatus: string; createdAt: string; visitorVisibilitySeq?: string };
+
+function compareDecimalStrings(left: string, right: string): number | undefined {
+  if (!/^\d+$/.test(left) || !/^\d+$/.test(right)) return undefined;
+  const normalizedLeft = left.replace(/^0+(?=\d)/, '');
+  const normalizedRight = right.replace(/^0+(?=\d)/, '');
+  if (normalizedLeft.length !== normalizedRight.length) return normalizedLeft.length < normalizedRight.length ? -1 : 1;
+  if (normalizedLeft === normalizedRight) return 0;
+  return normalizedLeft < normalizedRight ? -1 : 1;
+}
+
+function compareChatMessages(left: ChatMessage, right: ChatMessage): number {
+  if (left.visitorVisibilitySeq && right.visitorVisibilitySeq) {
+    const sequenceOrder = compareDecimalStrings(left.visitorVisibilitySeq, right.visitorVisibilitySeq);
+    if (sequenceOrder !== undefined && sequenceOrder !== 0) return sequenceOrder;
+  }
+  return left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id);
+}
 
 const ChatWidget: React.FC = () => {
   const { widgetId } = useParams<{ widgetId: string }>();
@@ -43,14 +60,14 @@ const ChatWidget: React.FC = () => {
       setMessages((items) => {
         const merged = new Map(items.map((item) => [item.id, item]));
         nextMessages.forEach((item) => merged.set(item.id, item));
-        return Array.from(merged.values()).sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
+        return Array.from(merged.values()).sort(compareChatMessages);
       });
     } else {
       setMessages((items) => {
         if (replace || items.length === 0) return nextMessages;
         const merged = new Map(items.map((item) => [item.id, item]));
         nextMessages.forEach((item) => merged.set(item.id, item));
-        return Array.from(merged.values()).sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
+        return Array.from(merged.values()).sort(compareChatMessages);
       });
     }
     const nextHasMore = Boolean(response.data.data.pagination?.hasMore);

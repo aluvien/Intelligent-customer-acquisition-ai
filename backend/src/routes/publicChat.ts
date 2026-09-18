@@ -61,41 +61,32 @@ router.get('/sessions/:sessionId/messages', async (req, res, next) => {
         values.push(before.sequence, before.id);
         cursorFilter = ' AND (visitor_visibility_seq < $4::bigint OR (visitor_visibility_seq = $4::bigint AND id < $5))';
       } else if (before) {
-        // Convert the pre-009 timestamp cursor to the new visibility sequence
-        // when its boundary row still exists. This lets an old client switch
-        // to sequence pagination without skipping a recovered message.
-        const boundaryValues: unknown[] = [context.tenantId, context.widgetId, context.visitorId, before.createdAt];
-        const boundary = before.id
-          ? await client.query<{ visitor_visibility_seq: string }>(
+        // Convert a pre-009 timestamp+id cursor to the new visibility sequence
+        // when its boundary row still exists. Timestamp-only cursors keep
+        // their original strict timestamp boundary because they have no row
+        // identity; converting MAX(seq) would skip that MAX row.
+        if (!before.id) {
+          values.push(before.createdAt);
+          cursorFilter = ' AND created_at < $4::timestamptz';
+        } else {
+          const boundaryValues: unknown[] = [context.tenantId, context.widgetId, context.visitorId, before.createdAt, before.id];
+          const boundary = await client.query<{ visitor_visibility_seq: string }>(
             `SELECT visitor_visibility_seq::text
                FROM messages
               WHERE tenant_id = $1
                 AND conversation_id IN (SELECT id FROM conversations WHERE tenant_id = $1 AND widget_id = $2 AND external_user_id = $3)
                 AND created_at = $4::timestamptz AND id = $5
               LIMIT 1`,
-            [...boundaryValues, before.id],
-          )
-          : await client.query<{ visitor_visibility_seq: string }>(
-            `SELECT MAX(visitor_visibility_seq)::text AS visitor_visibility_seq
-               FROM messages
-              WHERE tenant_id = $1
-                AND conversation_id IN (SELECT id FROM conversations WHERE tenant_id = $1 AND widget_id = $2 AND external_user_id = $3)
-                AND created_at < $4::timestamptz`,
             boundaryValues,
           );
-        const sequence = boundary.rows[0]?.visitor_visibility_seq;
-        if (sequence) {
-          values.push(sequence);
-          if (before.id) {
-            values.push(before.id);
+          const sequence = boundary.rows[0]?.visitor_visibility_seq;
+          if (sequence) {
+            values.push(sequence, before.id);
             cursorFilter = ' AND (visitor_visibility_seq < $4::bigint OR (visitor_visibility_seq = $4::bigint AND id < $5))';
           } else {
-            cursorFilter = ' AND visitor_visibility_seq < $4::bigint';
+            values.push(before.createdAt, before.id);
+            cursorFilter = ' AND (created_at < $4::timestamptz OR (created_at = $4::timestamptz AND id < $5))';
           }
-        } else {
-          values.push(before.createdAt);
-          cursorFilter = before.id ? ' AND (created_at < $4 OR (created_at = $4 AND id < $5))' : ' AND created_at < $4';
-          if (before.id) values.push(before.id);
         }
       }
       const result = await client.query(`SELECT id, conversation_id AS "conversationId", direction, sender_type AS "senderType", content, delivery_status AS "deliveryStatus", created_at AS "createdAt", visitor_visibility_seq AS "visitorVisibilitySeq" FROM messages WHERE tenant_id = $1 AND conversation_id IN (SELECT id FROM conversations WHERE tenant_id = $1 AND widget_id = $2 AND external_user_id = $3) AND (direction = 'inbound' OR delivery_status IN ('provider_accepted', 'delivered'))${cursorFilter} ORDER BY visitor_visibility_seq DESC, id DESC LIMIT 200`, values);
@@ -103,7 +94,7 @@ router.get('/sessions/:sessionId/messages', async (req, res, next) => {
       if (providerAcceptedIds.length > 0) {
         await client.query(`UPDATE messages SET delivery_status = 'delivered' WHERE tenant_id = $1 AND id = ANY($2::text[]) AND delivery_status = 'provider_accepted'`, [context.tenantId, providerAcceptedIds]);
       }
-      const rows = result.rows.reverse().map(({ visitorVisibilitySeq: _visitorVisibilitySeq, ...row }) => providerAcceptedIds.includes(row.id) ? { ...row, deliveryStatus: 'delivered' } : row);
+      const rows = result.rows.reverse().map((row) => providerAcceptedIds.includes(row.id) ? { ...row, deliveryStatus: 'delivered' } : row);
       // `rows` is now oldest-to-newest after reverse(), so the first item is
       // the correct boundary for the next older page.
       const oldest = result.rows[0];
