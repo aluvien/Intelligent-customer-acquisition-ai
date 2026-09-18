@@ -56,7 +56,8 @@ async function complete(job: Job): Promise<void> {
 
 async function fail(job: Job, error: unknown): Promise<void> {
   const message = error instanceof Error ? error.message.slice(0, 1000) : '任务失败';
-  const terminal = job.attempts >= job.max_attempts;
+  const deterministicBlocked = job.type === 'ai_draft' && error instanceof AppError && ['AI_NOT_CONFIGURED', 'AI_PROVIDER_UNSUPPORTED', 'AI_KNOWLEDGE_REQUIRED'].includes(error.code);
+  const terminal = job.attempts >= job.max_attempts || deterministicBlocked;
   const delaySeconds = Math.min(300, 2 ** Math.max(0, job.attempts - 1) * 5);
   await query(
     `UPDATE jobs

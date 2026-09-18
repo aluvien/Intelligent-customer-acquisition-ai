@@ -1,5 +1,7 @@
 import express from 'express';
 import { query, checkDatabase } from '../db';
+import { config } from '../config';
+import { checkRedis } from '../realtime/tickets';
 import { tenantId } from './helpers';
 
 const router = express.Router();
@@ -20,7 +22,8 @@ router.get('/monitoring', async (req, res, next) => {
   try {
     const memory = process.memoryUsage();
     const dbReady = await checkDatabase();
-    res.json({ success: true, message: '获取运行状态成功', data: { uptimeSeconds: Math.floor(process.uptime()), memoryRssBytes: memory.rss, heapUsedBytes: memory.heapUsed, database: dbReady ? 'ready' : 'unavailable', nodeEnv: process.env.NODE_ENV || 'development' } });
+    const redisReady = config.redisUrl ? await checkRedis() : false;
+    res.json({ success: true, message: '获取运行状态成功', data: { uptimeSeconds: Math.floor(process.uptime()), memoryRssBytes: memory.rss, heapUsedBytes: memory.heapUsed, database: dbReady ? 'ready' : 'unavailable', redis: config.redisUrl ? (redisReady ? 'ready' : 'unavailable') : 'not-configured', nodeEnv: process.env.NODE_ENV || 'development' } });
   } catch (error) { next(error); }
 });
 
