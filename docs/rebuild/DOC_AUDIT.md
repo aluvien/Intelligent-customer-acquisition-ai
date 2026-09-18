@@ -1,6 +1,6 @@
 # Markdown 与源码核对
 
-仓库 Markdown 是历史资料，不直接作为已验证能力。以下结论以 `38f37ce` 源码为准。
+仓库 Markdown 是历史资料，不直接作为已验证能力。以下结论记录改造前 `38f37ce` 的源码核对结果；当前实现以最新 `main`、`README.md` 和 `docs/rebuild/STATUS.md` 为准。
 
 ## 关键冲突
 

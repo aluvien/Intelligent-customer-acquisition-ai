@@ -3,7 +3,7 @@ import { query, withTransaction } from '../db';
 import { randomId } from '../config';
 import { AppError } from '../errors';
 import { broadcast } from '../realtime/hub';
-import { enqueueJob } from '../jobs/worker';
+import { insertJob } from '../jobs/worker';
 import { optionalText, pageParams, requireText, tenantId } from './helpers';
 import { requireRole } from '../middleware/auth';
 
@@ -120,9 +120,9 @@ router.post('/:id/messages', requireRole('admin', 'operator'), async (req, res, 
     await withTransaction(async (client) => {
       await client.query(`INSERT INTO messages(id, tenant_id, conversation_id, direction, sender_type, message_type, content, delivery_status, metadata) VALUES ($1, $2, $3, 'outbound', 'human', 'web_message', $4, 'queued', $5::jsonb)`, [messageId, tenant, conversation.id, content, JSON.stringify({ userId: req.auth!.userId })]);
       await client.query(`UPDATE conversations SET last_message_at = NOW(), message_count = message_count + 1, updated_at = NOW() WHERE id = $1 AND tenant_id = $2`, [conversation.id, tenant]);
+      await insertJob(client, tenant, conversation.widget_id ? 'web_delivery' : 'platform_delivery', { conversationId: conversation.id, messageId }, conversation.widget_id ? 3 : 1);
     });
-    await enqueueJob(tenant, conversation.widget_id ? 'web_delivery' : 'platform_delivery', { conversationId: conversation.id, messageId }, conversation.widget_id ? 3 : 1);
-    broadcast(tenant, { type: 'message', data: { id: messageId, conversationId: conversation.id, direction: 'outbound', senderType: 'human', content, deliveryStatus: 'queued' }, timestamp: new Date().toISOString() });
+    broadcast(tenant, { type: 'message', data: { id: messageId, conversationId: conversation.id, direction: 'outbound', senderType: 'human', content, deliveryStatus: 'queued', createdAt: new Date().toISOString() }, timestamp: new Date().toISOString() });
     res.status(201).json({ success: true, message: '回复已进入发送队列', data: { messageId, deliveryStatus: 'queued' } });
   } catch (error) { next(error); }
 });
@@ -134,17 +134,16 @@ router.post('/:id/drafts/:aiRunId/approve', requireRole('admin', 'operator'), as
     const result = await withTransaction(async (client) => {
       const run = await client.query<{ draft: string | null; status: string }>(`SELECT draft, status FROM ai_runs WHERE id = $1 AND tenant_id = $2 AND conversation_id = $3 FOR UPDATE`, [req.params.aiRunId, tenant, req.params.id]);
       if (!run.rows[0] || run.rows[0].status !== 'succeeded' || !(content || run.rows[0].draft)) throw new AppError(409, 'DRAFT_NOT_READY', 'AI 草稿尚未准备好或已失效');
-      const conversation = await client.query<{ status: string; mode: string }>('SELECT status, mode FROM conversations WHERE id = $1 AND tenant_id = $2 FOR UPDATE', [req.params.id, tenant]);
+      const conversation = await client.query<{ status: string; mode: string; widget_id: string | null }>('SELECT status, mode, widget_id FROM conversations WHERE id = $1 AND tenant_id = $2 FOR UPDATE', [req.params.id, tenant]);
       if (!conversation.rows[0] || conversation.rows[0].status === 'closed') throw new AppError(409, 'CONVERSATION_CLOSED', '对话已关闭');
       const messageId = randomId();
       const text = content || run.rows[0].draft!;
       await client.query(`INSERT INTO messages(id, tenant_id, conversation_id, direction, sender_type, message_type, content, delivery_status, metadata) VALUES ($1, $2, $3, 'outbound', 'human', 'web_message', $4, 'queued', $5::jsonb)`, [messageId, tenant, req.params.id, text, JSON.stringify({ approvedAiRunId: req.params.aiRunId, userId: req.auth!.userId })]);
       await client.query(`UPDATE conversations SET last_message_at = NOW(), message_count = message_count + 1, updated_at = NOW() WHERE id = $1`, [req.params.id]);
+      await insertJob(client, tenant, conversation.rows[0].widget_id ? 'web_delivery' : 'platform_delivery', { conversationId: req.params.id, messageId }, conversation.rows[0].widget_id ? 3 : 1);
       return { messageId, text };
     });
-    const conversation = await getConversation(req.params.id, tenant);
-    await enqueueJob(tenant, conversation.widget_id ? 'web_delivery' : 'platform_delivery', { conversationId: req.params.id, messageId: result.messageId }, conversation.widget_id ? 3 : 1);
-    broadcast(tenant, { type: 'message', data: { id: result.messageId, conversationId: req.params.id, direction: 'outbound', senderType: 'human', content: result.text, deliveryStatus: 'queued' }, timestamp: new Date().toISOString() });
+    broadcast(tenant, { type: 'message', data: { id: result.messageId, conversationId: req.params.id, direction: 'outbound', senderType: 'human', content: result.text, deliveryStatus: 'queued', createdAt: new Date().toISOString() }, timestamp: new Date().toISOString() });
     res.status(201).json({ success: true, message: '草稿已人工批准并进入发送队列', data: { messageId: result.messageId, deliveryStatus: 'queued' } });
   } catch (error) { next(error); }
 });

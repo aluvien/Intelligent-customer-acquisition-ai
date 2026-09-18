@@ -1,6 +1,6 @@
 import express from 'express';
 import { query } from '../db';
-import { stats as realtimeStats } from '../realtime/hub';
+import { tenantConnectionCount } from '../realtime/hub';
 import { tenantId } from './helpers';
 
 const router = express.Router();
@@ -42,7 +42,7 @@ router.get('/realtime', async (req, res, next) => {
     const result = await query<{ active: string; messages: string }>(`SELECT (SELECT COUNT(*) FROM conversations WHERE tenant_id = $1 AND status = 'active')::text AS active, (SELECT COUNT(*) FROM messages WHERE tenant_id = $1 AND created_at >= NOW() - INTERVAL '1 minute')::text AS messages`, [tenant]);
     const memory = process.memoryUsage();
     res.json({ success: true, message: '获取实时数据成功', data: {
-      onlineUsers: realtimeStats().connections,
+      onlineUsers: tenantConnectionCount(tenant),
       activeConversations: Number(result.rows[0]?.active || 0),
       messagesPerMinute: Number(result.rows[0]?.messages || 0),
       systemLoad: Number(((memory.rss / process.memoryUsage().heapTotal) * 100).toFixed(2)),

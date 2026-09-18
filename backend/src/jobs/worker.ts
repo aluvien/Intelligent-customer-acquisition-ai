@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import type { PoolClient } from 'pg';
 import { query, withTransaction } from '../db';
 import { randomId } from '../config';
 import { AppError } from '../errors';
@@ -18,9 +19,9 @@ const WORKER_ID = `${process.pid}-${crypto.randomUUID()}`;
 let timer: NodeJS.Timeout | undefined;
 let running = false;
 
-export async function enqueueJob(tenantId: string, type: Job['type'], payload: Record<string, unknown>, maxAttempts = 3): Promise<string> {
+export async function insertJob(client: PoolClient, tenantId: string, type: Job['type'], payload: Record<string, unknown>, maxAttempts = 3): Promise<string> {
   const id = randomId();
-  await query(
+  await client.query(
     `INSERT INTO jobs(id, tenant_id, type, payload, max_attempts) VALUES ($1, $2, $3, $4::jsonb, $5)`,
     [id, tenantId, type, JSON.stringify(payload), maxAttempts],
   );
@@ -88,7 +89,7 @@ async function processWebDelivery(job: Job): Promise<void> {
   }
   const delivered = await query(`UPDATE messages SET delivery_status = 'delivered' WHERE id = $1 AND tenant_id = $2 AND delivery_status IN ('queued', 'sending') RETURNING id`, [messageId, job.tenant_id]);
   if (!delivered.rowCount) return;
-  broadcast(job.tenant_id, { type: 'message', data: { id: message.id, conversationId: message.conversation_id, content: message.content, type: message.sender_type, deliveryStatus: 'delivered', timestamp: message.created_at }, timestamp: new Date().toISOString() });
+  broadcast(job.tenant_id, { type: 'message', data: { id: message.id, conversationId: message.conversation_id, direction: 'outbound', senderType: message.sender_type, content: message.content, deliveryStatus: 'delivered', createdAt: message.created_at }, timestamp: new Date().toISOString() });
 }
 
 async function processAiDraft(job: Job): Promise<void> {
@@ -104,22 +105,20 @@ async function processAiDraft(job: Job): Promise<void> {
   try {
     const draft = await generateDraft(job.tenant_id, conversationId, input.rows[0].content);
     await query(`UPDATE ai_runs SET status = 'running', draft = $2, evidence = $3::jsonb, provider_request_id = $4, usage = $5::jsonb, error = NULL WHERE id = $1 AND tenant_id = $6`, [aiRunId, draft.text, JSON.stringify(draft.evidence), draft.providerRequestId || null, draft.usage ? JSON.stringify(draft.usage) : null, job.tenant_id]);
-    let autoMessageId: string | undefined;
     if (draft.text) {
-      autoMessageId = await withTransaction(async (client) => {
+      await withTransaction(async (client) => {
         const locked = await client.query<{ mode: 'human' | 'ai_draft' | 'auto'; mode_version: number; widget_id: string | null }>('SELECT mode, mode_version, widget_id FROM conversations WHERE id = $1 AND tenant_id = $2 FOR UPDATE', [conversationId, job.tenant_id]);
         if (!locked.rows[0] || locked.rows[0].mode !== 'auto' || !locked.rows[0].widget_id) return undefined;
         const queuedModeVersion = Number(job.payload.modeVersion || 0);
         if (queuedModeVersion > 0 && locked.rows[0].mode_version !== queuedModeVersion) return undefined;
         const existing = await client.query<{ id: string }>(`SELECT id FROM messages WHERE tenant_id = $1 AND conversation_id = $2 AND direction = 'outbound' AND sender_type = 'ai' AND metadata->>'aiRunId' = $3 LIMIT 1`, [job.tenant_id, conversationId, aiRunId]);
-        if (existing.rows[0]) return existing.rows[0].id;
+        if (existing.rows[0]) return;
         const id = randomId();
         await client.query(`INSERT INTO messages(id, tenant_id, conversation_id, direction, sender_type, message_type, content, delivery_status, metadata) VALUES ($1, $2, $3, 'outbound', 'ai', 'web_message', $4, 'queued', $5::jsonb)`, [id, job.tenant_id, conversationId, draft.text, JSON.stringify({ aiRunId })]);
         await client.query(`UPDATE conversations SET last_message_at = NOW(), message_count = message_count + 1, updated_at = NOW() WHERE id = $1`, [conversationId]);
-        return id;
+        await insertJob(client, job.tenant_id, 'web_delivery', { conversationId, messageId: id });
       });
     }
-    if (autoMessageId) await enqueueJob(job.tenant_id, 'web_delivery', { conversationId, messageId: autoMessageId });
     await query(`UPDATE ai_runs SET status = 'succeeded', completed_at = NOW() WHERE id = $1 AND tenant_id = $2`, [aiRunId, job.tenant_id]);
     broadcast(job.tenant_id, { type: 'ai_draft', data: { aiRunId, conversationId, messageId, draft: draft.text, evidence: draft.evidence }, timestamp: new Date().toISOString() });
   } catch (error) {

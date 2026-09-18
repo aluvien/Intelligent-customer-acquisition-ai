@@ -22,6 +22,12 @@ function positiveIntEnv(name: string, fallback: number, max = Number.MAX_SAFE_IN
   return value;
 }
 
+function sameSiteEnv(): 'lax' | 'strict' | 'none' {
+  const value = optional('COOKIE_SAME_SITE', 'lax').toLowerCase();
+  if (!['lax', 'strict', 'none'].includes(value)) throw new Error('COOKIE_SAME_SITE 必须是 lax、strict 或 none');
+  return value as 'lax' | 'strict' | 'none';
+}
+
 export const config = {
   nodeEnv: optional('NODE_ENV', 'development'),
   port: positiveIntEnv('PORT', positiveIntEnv('API_PORT', 3001, 65535), 65535),
@@ -34,9 +40,11 @@ export const config = {
   corsOrigin: optional('CORS_ORIGIN', 'http://localhost:3000'),
   allowSelfRegistration: process.env.ALLOW_SELF_REGISTRATION === 'true',
   cookieSecure: process.env.COOKIE_SECURE === 'true',
-  cookieSameSite: optional('COOKIE_SAME_SITE', 'lax') as 'lax' | 'strict' | 'none',
+  cookieSameSite: sameSiteEnv(),
   visitorSessionTtlHours: positiveIntEnv('VISITOR_SESSION_TTL_HOURS', 24, 720),
   maxBodyBytes: positiveIntEnv('MAX_BODY_BYTES', 10, 100) * 1024 * 1024,
+  rateLimitWindowMs: positiveIntEnv('RATE_LIMIT_WINDOW_MS', 900_000, 86_400_000),
+  rateLimitMaxRequests: positiveIntEnv('RATE_LIMIT_MAX_REQUESTS', 100, 100_000),
   jwtSecretEntropy: process.env.JWT_SECRET?.length || 0,
 };
 
@@ -55,7 +63,7 @@ export function getEncryptionKey(): Buffer {
 
 export function assertProductionConfig(): void {
   if (config.nodeEnv !== 'production') return;
-  const requiredNames = ['DATABASE_URL', 'REDIS_URL', 'JWT_SECRET', 'ENCRYPTION_KEY'];
+  const requiredNames = ['DATABASE_URL', 'REDIS_URL', 'JWT_SECRET', 'ENCRYPTION_KEY', 'CORS_ORIGIN'];
   const missing = requiredNames.filter((name) => !process.env[name]?.trim());
   if (missing.length > 0) {
     throw new Error(`生产启动缺少必要配置: ${missing.join(', ')}`);
@@ -66,6 +74,8 @@ export function assertProductionConfig(): void {
   if (config.cookieSameSite === 'none' && !config.cookieSecure) {
     throw new Error('COOKIE_SAME_SITE=none 时必须启用 COOKIE_SECURE=true');
   }
+  if (!config.cookieSecure) throw new Error('生产环境必须启用 COOKIE_SECURE=true');
+  if (config.corsOrigin.split(',').some((origin) => origin.trim() === '*')) throw new Error('生产环境禁止使用 CORS_ORIGIN=*');
 }
 
 export function randomId(): string {

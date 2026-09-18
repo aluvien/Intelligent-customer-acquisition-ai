@@ -40,7 +40,7 @@ app.use(express.json({ limit: config.maxBodyBytes }));
 app.use(express.urlencoded({ extended: true, limit: config.maxBodyBytes }));
 
 const loginLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 20, skipSuccessfulRequests: true, standardHeaders: true, legacyHeaders: false, message: { success: false, message: '登录尝试过于频繁，请稍后再试' } });
-const apiLimiter = rateLimit({ windowMs: Number(process.env.RATE_LIMIT_WINDOW_MS || 900_000), max: Number(process.env.RATE_LIMIT_MAX_REQUESTS || 100), standardHeaders: true, legacyHeaders: false, message: { success: false, message: '请求过于频繁，请稍后再试' } });
+const apiLimiter = rateLimit({ windowMs: config.rateLimitWindowMs, max: config.rateLimitMaxRequests, standardHeaders: true, legacyHeaders: false, message: { success: false, message: '请求过于频繁，请稍后再试' } });
 app.use('/api/auth/login', loginLimiter);
 app.use('/api', apiLimiter);
 

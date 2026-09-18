@@ -1,8 +1,8 @@
 import express from 'express';
-import { query } from '../db';
+import { query, withTransaction } from '../db';
 import { randomId } from '../config';
 import { AppError } from '../errors';
-import { enqueueJob } from '../jobs/worker';
+import { insertJob } from '../jobs/worker';
 import { requireRole } from '../middleware/auth';
 import { requireText, tenantId } from './helpers';
 
@@ -51,18 +51,22 @@ router.delete('/knowledge/:id', requireRole('admin'), async (req, res, next) => 
   } catch (error) { next(error); }
 });
 
-router.post('/draft', async (req, res, next) => {
+router.post('/draft', requireRole('admin', 'operator'), async (req, res, next) => {
   try {
     const conversationId = requireText(req.body?.conversationId, 'conversationId', 100);
     const messageId = requireText(req.body?.messageId, 'messageId', 100);
-    const conversation = await query<{ id: string; mode_version: number }>('SELECT id, mode_version FROM conversations WHERE id = $1 AND tenant_id = $2', [conversationId, tenantId(req)]);
-    if (!conversation.rowCount) throw new AppError(404, 'CONVERSATION_NOT_FOUND', '对话不存在');
-    const message = await query<{ id: string }>('SELECT id FROM messages WHERE id = $1 AND conversation_id = $2 AND tenant_id = $3 AND direction = \'inbound\'', [messageId, conversationId, tenantId(req)]);
-    if (!message.rowCount) throw new AppError(404, 'MESSAGE_NOT_FOUND', 'AI 输入消息不存在或不属于该对话');
-    const aiRunId = randomId();
-    await query(`INSERT INTO ai_runs(id, tenant_id, conversation_id, message_id, provider, status) VALUES ($1, $2, $3, $4, $5, 'queued')`, [aiRunId, tenantId(req), conversationId, messageId, process.env.AI_PROVIDER || 'coze']);
-    await enqueueJob(tenantId(req), 'ai_draft', { conversationId, messageId, aiRunId, modeVersion: conversation.rows[0].mode_version });
-    res.status(202).json({ success: true, message: 'AI 草稿任务已创建', data: { aiRunId, status: 'queued' } });
+    const tenant = tenantId(req);
+    const result = await withTransaction(async (client) => {
+      const conversation = await client.query<{ id: string; mode_version: number }>('SELECT id, mode_version FROM conversations WHERE id = $1 AND tenant_id = $2 FOR SHARE', [conversationId, tenant]);
+      if (!conversation.rowCount) throw new AppError(404, 'CONVERSATION_NOT_FOUND', '对话不存在');
+      const message = await client.query<{ id: string }>('SELECT id FROM messages WHERE id = $1 AND conversation_id = $2 AND tenant_id = $3 AND direction = \'inbound\'', [messageId, conversationId, tenant]);
+      if (!message.rowCount) throw new AppError(404, 'MESSAGE_NOT_FOUND', 'AI 输入消息不存在或不属于该对话');
+      const aiRunId = randomId();
+      await client.query(`INSERT INTO ai_runs(id, tenant_id, conversation_id, message_id, provider, status) VALUES ($1, $2, $3, $4, $5, 'queued')`, [aiRunId, tenant, conversationId, messageId, process.env.AI_PROVIDER || 'coze']);
+      await insertJob(client, tenant, 'ai_draft', { conversationId, messageId, aiRunId, modeVersion: conversation.rows[0].mode_version });
+      return { aiRunId };
+    });
+    res.status(202).json({ success: true, message: 'AI 草稿任务已创建', data: { aiRunId: result.aiRunId, status: 'queued' } });
   } catch (error) { next(error); }
 });
 

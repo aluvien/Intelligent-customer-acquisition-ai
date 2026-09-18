@@ -2,7 +2,7 @@ import express from 'express';
 import { query } from '../db';
 import { randomId } from '../config';
 import { AppError } from '../errors';
-import { isUniqueViolation, pageParams, requireText, tenantId } from './helpers';
+import { isUniqueViolation, optionalText, pageParams, requireText, tenantId } from './helpers';
 import { requireRole } from '../middleware/auth';
 
 const router = express.Router();
@@ -17,7 +17,7 @@ router.get('/', async (req, res, next) => {
     if (status) { values.push(status); filters.push(`l.status = $${values.length}`); }
     const count = await query<{ count: string }>(`SELECT COUNT(*)::text AS count FROM leads l WHERE ${filters.join(' AND ')}`, values);
     values.push(limit, offset);
-    const result = await query(`SELECT l.id, l.conversation_id AS "conversationId", l.channel_account_id AS "channelId", l.external_user_id AS "userId", l.user_nickname AS "userNickname", l.phone, l.email, l.contact_source AS "contactSource", l.consent_at AS "consentAt", l.consent_version AS "consentVersion", l.score, l.status, l.assigned_to AS "assignedTo", l.tags, l.notes, l.created_at AS "createdAt", l.updated_at AS "updatedAt" FROM leads l WHERE ${filters.join(' AND ')} ORDER BY l.created_at DESC LIMIT $${values.length - 1} OFFSET $${values.length}`, values);
+    const result = await query(`SELECT l.id, l.conversation_id AS "conversationId", l.channel_account_id AS "channelId", l.external_user_id AS "userId", l.user_nickname AS "userNickname", CASE WHEN l.phone IS NULL THEN NULL WHEN length(l.phone) <= 4 THEN '****' ELSE repeat('*', GREATEST(length(l.phone) - 4, 4)) || right(l.phone, 4) END AS phone, CASE WHEN l.email IS NULL THEN NULL WHEN position('@' IN l.email) > 1 THEN left(l.email, 1) || '***' || substring(l.email FROM position('@' IN l.email)) ELSE '***' END AS email, l.contact_source AS "contactSource", l.consent_at AS "consentAt", l.consent_version AS "consentVersion", l.score, l.status, l.assigned_to AS "assignedTo", l.tags, l.notes, l.created_at AS "createdAt", l.updated_at AS "updatedAt" FROM leads l WHERE ${filters.join(' AND ')} ORDER BY l.created_at DESC LIMIT $${values.length - 1} OFFSET $${values.length}`, values);
     const total = Number(count.rows[0]?.count || 0);
     res.json({ success: true, message: '获取线索列表成功', data: { leads: result.rows, pagination: { page, limit, total, totalPages: Math.ceil(total / limit) } } });
   } catch (error) { next(error); }
@@ -44,15 +44,19 @@ router.post('/', requireRole('admin', 'operator'), async (req, res, next) => {
   try {
     const tenant = tenantId(req);
     const conversationId = requireText(req.body?.conversationId, 'conversationId', 100);
-    const phone = typeof req.body?.phone === 'string' ? req.body.phone.trim() : undefined;
-    const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : undefined;
+    const phone = optionalText(req.body?.phone, 64);
+    const email = optionalText(req.body?.email, 254)?.toLowerCase();
     if (!phone && !email) throw new AppError(400, 'CONTACT_REQUIRED', '至少需要客户主动提供手机号或邮箱');
+    if (phone && !/^[+0-9() .-]{6,64}$/.test(phone)) throw new AppError(400, 'INVALID_PHONE', '手机号格式无效');
+    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new AppError(400, 'INVALID_EMAIL', '邮箱格式无效');
     const contactSource = typeof req.body?.contactSource === 'string' ? req.body.contactSource : 'customer_submitted';
     if (!['customer_submitted', 'authorized'].includes(contactSource)) throw new AppError(400, 'INVALID_CONTACT_SOURCE', '联系方式来源无效');
+    const score = req.body?.score === undefined || req.body?.score === null ? 0 : Number(req.body.score);
+    if (!Number.isFinite(score) || score < 0 || score > 10) throw new AppError(400, 'INVALID_SCORE', '评分必须在 0 到 10 之间');
     const conversation = await query<{ id: string; channel_account_id: string | null; external_user_id: string; user_nickname: string }>('SELECT id, channel_account_id, external_user_id, user_nickname FROM conversations WHERE id = $1 AND tenant_id = $2', [conversationId, tenant]);
     if (!conversation.rows[0]) throw new AppError(404, 'CONVERSATION_NOT_FOUND', '对话不存在');
     const id = randomId();
-    const result = await query(`INSERT INTO leads(id, tenant_id, conversation_id, channel_account_id, external_user_id, user_nickname, phone, email, contact_source, consent_at, consent_version, score, tags, notes) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), $10, $11, $12, $13) RETURNING id, conversation_id AS "conversationId", phone, email, status, score, created_at AS "createdAt"`, [id, tenant, conversationId, conversation.rows[0].channel_account_id, conversation.rows[0].external_user_id, conversation.rows[0].user_nickname, phone || null, email || null, contactSource, typeof req.body?.consentVersion === 'string' ? req.body.consentVersion : 'v1', Number(req.body?.score || 0), Array.isArray(req.body?.tags) ? req.body.tags.filter((tag: unknown): tag is string => typeof tag === 'string') : [], typeof req.body?.notes === 'string' ? req.body.notes.slice(0, 4000) : '']);
+    const result = await query(`INSERT INTO leads(id, tenant_id, conversation_id, channel_account_id, external_user_id, user_nickname, phone, email, contact_source, consent_at, consent_version, score, tags, notes) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), $10, $11, $12, $13) RETURNING id, conversation_id AS "conversationId", phone, email, status, score, created_at AS "createdAt"`, [id, tenant, conversationId, conversation.rows[0].channel_account_id, conversation.rows[0].external_user_id, conversation.rows[0].user_nickname, phone || null, email || null, contactSource, typeof req.body?.consentVersion === 'string' ? req.body.consentVersion.slice(0, 40) : 'v1', score, Array.isArray(req.body?.tags) ? req.body.tags.filter((tag: unknown): tag is string => typeof tag === 'string' && tag.length <= 100).slice(0, 20) : [], typeof req.body?.notes === 'string' ? req.body.notes.slice(0, 4000) : '']);
     res.status(201).json({ success: true, message: '线索已保存', data: { lead: result.rows[0] } });
   } catch (error) {
     if (isUniqueViolation(error)) return next(new AppError(409, 'LEAD_EXISTS', '该对话已经存在一条线索'));

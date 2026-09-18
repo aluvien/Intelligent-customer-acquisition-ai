@@ -80,7 +80,7 @@ async function createSession(user: UserRow): Promise<{ token: string; refreshTok
 }
 
 function validateCredentials(username: unknown, password: unknown): asserts username is string {
-  if (typeof username !== 'string' || username.trim().length < 3 || typeof password !== 'string' || password.length < 8) {
+  if (typeof username !== 'string' || username.trim().length < 3 || username.trim().length > 120 || typeof password !== 'string' || password.length < 8 || password.length > 256) {
     throw new AppError(400, 'INVALID_CREDENTIALS', '用户名至少 3 个字符，密码至少 8 个字符');
   }
 }
@@ -105,7 +105,7 @@ router.post('/register', async (req, res, next) => {
     validateCredentials(req.body?.username, req.body?.password);
     const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : '';
     const tenantName = typeof req.body?.tenantName === 'string' ? req.body.tenantName.trim() : '';
-    if (!email || !tenantName || req.body.password !== req.body.confirmPassword) throw new AppError(400, 'INVALID_REGISTRATION', '企业名称、邮箱和两次一致的密码均为必填项');
+    if (!email || email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || !tenantName || tenantName.length > 160 || req.body.password !== req.body.confirmPassword) throw new AppError(400, 'INVALID_REGISTRATION', '企业名称、有效邮箱和两次一致的密码均为必填项');
     const user = await withTransaction(async (client) => {
       const tenantId = randomId();
       const userId = randomId();
@@ -139,13 +139,14 @@ router.post('/refresh', async (req, res, next) => {
     if (!checkOrigin(req.headers.origin)) throw new AppError(403, 'ORIGIN_FORBIDDEN', '请求来源不受信任');
     const refreshToken = parseCookies(req.headers.cookie)[REFRESH_COOKIE];
     if (!refreshToken) throw new AppError(401, 'REFRESH_REQUIRED', '刷新会话不存在');
-    const current = await query<{ id: string; user_id: string }>(`SELECT id, user_id FROM auth_sessions WHERE refresh_token_hash = $1 AND revoked_at IS NULL AND expires_at > NOW()`, [hashOpaqueToken(refreshToken)]);
-    const session = current.rows[0];
-    if (!session) throw new AppError(401, 'REFRESH_INVALID', '刷新会话无效或已过期');
-    const user = await findUserById(session.user_id);
-    if (!user || user.status !== 'active' || user.tenant_status !== 'active') throw new AppError(401, 'ACCOUNT_DISABLED', '账户不可用');
     const nextSession = await withTransaction(async (client) => {
-      await client.query('UPDATE auth_sessions SET revoked_at = NOW() WHERE id = $1', [session.id]);
+      const current = await client.query<{ id: string; user_id: string }>(`SELECT id, user_id FROM auth_sessions WHERE refresh_token_hash = $1 AND revoked_at IS NULL AND expires_at > NOW() FOR UPDATE`, [hashOpaqueToken(refreshToken)]);
+      const session = current.rows[0];
+      if (!session) throw new AppError(401, 'REFRESH_INVALID', '刷新会话无效、已过期或已使用');
+      const user = await findUserById(session.user_id);
+      if (!user || user.status !== 'active' || user.tenant_status !== 'active') throw new AppError(401, 'ACCOUNT_DISABLED', '账户不可用');
+      const revoked = await client.query('UPDATE auth_sessions SET revoked_at = NOW(), last_used_at = NOW() WHERE id = $1 AND revoked_at IS NULL RETURNING id', [session.id]);
+      if (!revoked.rowCount) throw new AppError(401, 'REFRESH_REPLAYED', '刷新会话已使用，请重新登录');
       const nextId = randomId();
       const nextRefresh = randomOpaqueToken();
       await client.query(`INSERT INTO auth_sessions(id, user_id, tenant_id, refresh_token_hash, expires_at) VALUES ($1, $2, $3, $4, NOW() + ($5 || ' days')::interval)`, [nextId, user.id, user.tenant_id, hashOpaqueToken(nextRefresh), String(config.refreshTokenTtlDays)]);

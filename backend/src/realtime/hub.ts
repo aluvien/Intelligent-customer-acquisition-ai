@@ -88,4 +88,8 @@ export function stats(): { tenants: number; connections: number } {
   return { tenants: tenants.size, connections };
 }
 
-module.exports = { attach, broadcast, stats };
+export function tenantConnectionCount(tenantId: string): number {
+  return tenants.get(tenantId)?.size || 0;
+}
+
+module.exports = { attach, broadcast, stats, tenantConnectionCount };

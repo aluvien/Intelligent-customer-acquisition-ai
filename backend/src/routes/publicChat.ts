@@ -3,7 +3,7 @@ import { query, withTransaction } from '../db';
 import { config, hashOpaqueToken, randomId, randomOpaqueToken } from '../config';
 import { AppError } from '../errors';
 import { broadcast } from '../realtime/hub';
-import { enqueueJob } from '../jobs/worker';
+import { insertJob } from '../jobs/worker';
 import { optionalText, requireText } from './helpers';
 
 const router = express.Router();
@@ -11,7 +11,7 @@ const router = express.Router();
 type VisitorContext = { sessionId: string; tenantId: string; widgetId: string; visitorId: string; conversationId?: string };
 
 function assertAllowedOrigin(origin: string | undefined, allowedOrigins: string[]): void {
-  if (origin && allowedOrigins.length > 0 && !allowedOrigins.includes(origin)) throw new AppError(403, 'ORIGIN_FORBIDDEN', '访客入口不允许当前来源');
+  if (origin && !allowedOrigins.includes(origin)) throw new AppError(403, 'ORIGIN_FORBIDDEN', '访客入口不允许当前来源');
 }
 
 async function visitorContext(req: express.Request): Promise<VisitorContext> {
@@ -37,7 +37,9 @@ router.post('/widgets/:widgetId/sessions', async (req, res, next) => {
     const widget = await query<{ id: string; tenant_id: string; enabled: boolean; allowed_origins: string[] }>('SELECT id, tenant_id, enabled, allowed_origins FROM widgets WHERE id = $1', [req.params.widgetId]);
     if (!widget.rows[0] || !widget.rows[0].enabled) throw new AppError(404, 'WIDGET_NOT_FOUND', '访客入口不存在或已停用');
     assertAllowedOrigin(req.headers.origin, widget.rows[0].allowed_origins || []);
-    const visitorId = typeof req.body?.visitorId === 'string' && req.body.visitorId.trim() ? req.body.visitorId.trim().slice(0, 160) : randomId();
+    // The visitor identity is server generated. Accepting a client supplied ID would let a second
+    // visitor deliberately collide with another session and read its conversation history.
+    const visitorId = randomId();
     const sessionId = randomId();
     const token = randomOpaqueToken();
     await query(`INSERT INTO visitor_sessions(id, widget_id, tenant_id, visitor_id, token_hash, expires_at) VALUES ($1, $2, $3, $4, $5, NOW() + ($6 || ' hours')::interval)`, [sessionId, widget.rows[0].id, widget.rows[0].tenant_id, visitorId, hashOpaqueToken(token), String(config.visitorSessionTtlHours)]);
@@ -59,7 +61,8 @@ router.post('/sessions/:sessionId/messages', async (req, res, next) => {
     const content = requireText(req.body?.content, '消息内容', 4000);
     const nickname = optionalText(req.body?.nickname, 120) || '访客';
     const headerIdempotencyKey = typeof req.headers['idempotency-key'] === 'string' ? req.headers['idempotency-key'].trim() : '';
-    const idempotencyKey = headerIdempotencyKey && headerIdempotencyKey.length <= 160 ? headerIdempotencyKey : randomId();
+    if (!headerIdempotencyKey || headerIdempotencyKey.length > 160) throw new AppError(400, 'IDEMPOTENCY_KEY_REQUIRED', '消息必须提供有效的 Idempotency-Key');
+    const idempotencyKey = headerIdempotencyKey;
     const eventSource = `web:${context.widgetId}:${context.visitorId}`;
     const result = await withTransaction(async (client) => {
       const conversation = await client.query<{ id: string; mode: 'human' | 'ai_draft' | 'auto'; mode_version: number }>(
@@ -85,11 +88,13 @@ router.post('/sessions/:sessionId/messages', async (req, res, next) => {
       await client.query(`INSERT INTO messages(id, tenant_id, conversation_id, external_message_id, direction, sender_type, message_type, content, delivery_status, metadata) VALUES ($1, $2, $3, $4, 'inbound', 'visitor', 'web_message', $5, 'received', $6::jsonb)`, [messageId, context.tenantId, conversationId, idempotencyKey, content, JSON.stringify({ visitorSessionId: context.sessionId, standardEventVersion: '1' })]);
       await client.query('UPDATE conversations SET message_count = message_count + 1, last_message_at = NOW() WHERE id = $1', [conversationId]);
       const aiRunId = randomId();
-      if (mode !== 'human') await client.query(`INSERT INTO ai_runs(id, tenant_id, conversation_id, message_id, provider, status) VALUES ($1, $2, $3, $4, $5, 'queued')`, [aiRunId, context.tenantId, conversationId, messageId, process.env.AI_PROVIDER || 'coze']);
+      if (mode !== 'human') {
+        await client.query(`INSERT INTO ai_runs(id, tenant_id, conversation_id, message_id, provider, status) VALUES ($1, $2, $3, $4, $5, 'queued')`, [aiRunId, context.tenantId, conversationId, messageId, process.env.AI_PROVIDER || 'coze']);
+        await insertJob(client, context.tenantId, 'ai_draft', { conversationId, messageId, aiRunId, modeVersion });
+      }
       return { conversationId, messageId, aiRunId: mode === 'human' ? undefined : aiRunId, mode, modeVersion, duplicate: false };
     });
-    if (result.aiRunId) await enqueueJob(context.tenantId, 'ai_draft', { conversationId: result.conversationId, messageId: result.messageId, aiRunId: result.aiRunId, modeVersion: result.modeVersion });
-    if (!result.duplicate) broadcast(context.tenantId, { type: 'message', data: { id: result.messageId, conversationId: result.conversationId, direction: 'inbound', senderType: 'visitor', content, deliveryStatus: 'received' }, timestamp: new Date().toISOString() });
+    if (!result.duplicate) broadcast(context.tenantId, { type: 'message', data: { id: result.messageId, conversationId: result.conversationId, direction: 'inbound', senderType: 'visitor', content, deliveryStatus: 'received', createdAt: new Date().toISOString() }, timestamp: new Date().toISOString() });
     res.status(201).json({ success: true, message: '消息已接收', data: { conversationId: result.conversationId, messageId: result.messageId, aiRunId: result.aiRunId || null } });
   } catch (error) { next(error); }
 });
@@ -100,9 +105,13 @@ router.post('/sessions/:sessionId/lead', async (req, res, next) => {
     const phone = typeof req.body?.phone === 'string' ? req.body.phone.trim() : '';
     const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : '';
     if (!phone && !email) throw new AppError(400, 'CONTACT_REQUIRED', '请至少提供手机号或邮箱');
+    if (phone && !/^[+0-9() .-]{6,64}$/.test(phone)) throw new AppError(400, 'INVALID_PHONE', '手机号格式无效');
+    if (email && (email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))) throw new AppError(400, 'INVALID_EMAIL', '邮箱格式无效');
+    if (req.body?.consent !== true) throw new AppError(400, 'CONSENT_REQUIRED', '提交联系方式前需要确认同意');
     const conversation = await query<{ id: string; channel_account_id: string | null; external_user_id: string; user_nickname: string }>('SELECT id, channel_account_id, external_user_id, user_nickname FROM conversations WHERE tenant_id = $1 AND widget_id = $2 AND external_user_id = $3 ORDER BY created_at DESC LIMIT 1', [context.tenantId, context.widgetId, context.visitorId]);
     if (!conversation.rows[0]) throw new AppError(409, 'CONVERSATION_REQUIRED', '请先发送一条咨询消息');
-    const result = await query(`INSERT INTO leads(id, tenant_id, conversation_id, channel_account_id, external_user_id, user_nickname, phone, email, contact_source, consent_at, consent_version) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'customer_submitted', NOW(), $9) ON CONFLICT (tenant_id, conversation_id) DO UPDATE SET phone = COALESCE(EXCLUDED.phone, leads.phone), email = COALESCE(EXCLUDED.email, leads.email), consent_at = EXCLUDED.consent_at, consent_version = EXCLUDED.consent_version, updated_at = NOW() RETURNING id, status, created_at AS "createdAt"`, [randomId(), context.tenantId, conversation.rows[0].id, conversation.rows[0].channel_account_id, conversation.rows[0].external_user_id, conversation.rows[0].user_nickname, phone || null, email || null, typeof req.body?.consentVersion === 'string' ? req.body.consentVersion : 'v1']);
+    const consentVersion = typeof req.body?.consentVersion === 'string' && req.body.consentVersion.trim() ? req.body.consentVersion.trim().slice(0, 40) : 'v1';
+    const result = await query(`INSERT INTO leads(id, tenant_id, conversation_id, channel_account_id, external_user_id, user_nickname, phone, email, contact_source, consent_at, consent_version) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'customer_submitted', NOW(), $9) ON CONFLICT (tenant_id, conversation_id) DO UPDATE SET phone = COALESCE(EXCLUDED.phone, leads.phone), email = COALESCE(EXCLUDED.email, leads.email), consent_at = EXCLUDED.consent_at, consent_version = EXCLUDED.consent_version, updated_at = NOW() RETURNING id, status, created_at AS "createdAt"`, [randomId(), context.tenantId, conversation.rows[0].id, conversation.rows[0].channel_account_id, conversation.rows[0].external_user_id, conversation.rows[0].user_nickname, phone || null, email || null, consentVersion]);
     res.status(201).json({ success: true, message: '联系方式已提交', data: { lead: result.rows[0] } });
   } catch (error) { next(error); }
 });
