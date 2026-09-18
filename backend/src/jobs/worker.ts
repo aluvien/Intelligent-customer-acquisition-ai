@@ -141,6 +141,7 @@ async function processWebDelivery(job: Job): Promise<void> {
     );
     const message = messageResult.rows[0];
     if (!message) throw new AppError(404, 'MESSAGE_NOT_FOUND', '待发送消息不存在');
+    if (message.delivery_status === 'unknown') throw new AppError(409, 'WEB_DELIVERY_RECONCILIATION_REQUIRED', '网页消息投递结果未知，不能自动标记任务成功');
     if (!['queued', 'sending'].includes(message.delivery_status)) return undefined;
     const conversationResult = await client.query<{ mode: 'human' | 'ai_draft' | 'auto'; mode_version: number; status: string }>(
       'SELECT mode, mode_version, status FROM conversations WHERE id = $1 AND tenant_id = $2 FOR UPDATE',

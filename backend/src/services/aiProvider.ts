@@ -112,8 +112,9 @@ export function extractCozeText(body: CozeRecord): string {
 function extractUsage(...bodies: CozeRecord[]): Record<string, unknown> | undefined {
   for (const body of [...bodies].reverse()) {
     const nested = dataRecord(body);
-    const usage = body.usage || nested.usage;
-    if (usage && typeof usage === 'object' && !Array.isArray(usage) && Object.keys(usage).length > 0) return usage as Record<string, unknown>;
+    for (const usage of [body.usage, nested.usage]) {
+      if (usage && typeof usage === 'object' && !Array.isArray(usage) && Object.keys(usage).length > 0) return usage as Record<string, unknown>;
+    }
   }
   return undefined;
 }
@@ -147,6 +148,8 @@ async function generateWithCoze(tenantId: string, question: string, conversation
     `客户问题：\n${question}`,
   ].join('\n\n');
 
+  const deadline = Date.now() + 30_000;
+
   let meta = { conversationId: resumeConversationId, chatId: resumeChatId, status: '', usage: undefined as Record<string, unknown> | undefined };
   let initialBody: CozeRecord = {};
   let retrieveBody: CozeRecord = {};
@@ -154,6 +157,8 @@ async function generateWithCoze(tenantId: string, question: string, conversation
   let finalText = '';
 
   if (!resumeChatId || !resumeConversationId) {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) throw new AppError(502, 'AI_PROVIDER_TIMEOUT', 'Coze 对话在规定时间内未完成');
     const response = await axios.post(`${baseUrl}/chat`, {
       bot_id: botId,
       user_id: `conversation:${conversationId}`,
@@ -161,7 +166,7 @@ async function generateWithCoze(tenantId: string, question: string, conversation
       auto_save_history: true,
       additional_messages: [{ role: 'user', type: 'question', content: prompt, content_type: 'text' }],
     }, {
-      timeout: 20_000,
+      timeout: Math.min(20_000, remaining),
       params: previousConversationId ? { conversation_id: previousConversationId } : undefined,
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
       validateStatus: () => true,
@@ -182,7 +187,6 @@ async function generateWithCoze(tenantId: string, question: string, conversation
 
   if (!finalText) {
     if (!meta.conversationId || !meta.chatId) throw new AppError(502, 'AI_PROVIDER_INCOMPLETE', 'Coze 未返回可查询的 conversation_id/chat_id');
-    const deadline = Date.now() + 30_000;
     for (;;) {
       const remaining = deadline - Date.now();
       if (remaining <= 0) throw new AppError(502, 'AI_PROVIDER_TIMEOUT', 'Coze 对话在规定时间内未完成');
