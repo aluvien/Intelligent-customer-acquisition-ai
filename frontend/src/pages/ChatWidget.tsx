@@ -103,6 +103,13 @@ const ChatWidget: React.FC = () => {
   useEffect(() => {
     let active = true;
     const initViewGeneration = ++viewGeneration.current;
+    sessionGeneration.current += 1;
+    sessionRef.current = null;
+    sessionRecovery.current = null;
+    setSession(null);
+    setMessages([]);
+    setHistoryCursor(null);
+    setHistoryHasMore(false);
     const init = async () => {
       if (!widgetId) return;
       try {
@@ -153,6 +160,7 @@ const ChatWidget: React.FC = () => {
     const pollingSession = session;
     const timer = window.setInterval(() => {
       if (document.visibilityState !== 'visible') return;
+      if (viewGeneration.current !== pollingViewGeneration || sessionGeneration.current !== pollingSessionGeneration || sessionRef.current?.sessionId !== pollingSession.sessionId) return;
       void loadMessages(session).catch(async (err: any) => {
         if (err?.response?.status !== 401 || !widgetId) return;
         if (viewGeneration.current !== pollingViewGeneration || sessionGeneration.current !== pollingSessionGeneration || sessionRef.current?.sessionId !== pollingSession.sessionId) return;
