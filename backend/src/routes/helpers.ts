@@ -20,6 +20,13 @@ export function requireText(value: unknown, field: string, maxLength = 4000): st
   return value.trim();
 }
 
+export function parseExpectedModeVersion(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 1 || value > 2_147_483_647) {
+    throw new AppError(400, 'INVALID_MODE_VERSION', '必须提供有效的会话模式版本');
+  }
+  return value;
+}
+
 export function optionalText(value: unknown, maxLength = 4000): string | undefined {
   if (value === undefined || value === null || value === '') return undefined;
   if (typeof value !== 'string' || value.length > maxLength) throw new AppError(400, 'INVALID_INPUT', '文本参数长度无效');

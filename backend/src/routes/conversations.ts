@@ -4,7 +4,7 @@ import { randomId } from '../config';
 import { AppError } from '../errors';
 import { broadcast } from '../realtime/hub';
 import { insertJob } from '../jobs/worker';
-import { encodeMessageCursor, optionalText, pageParams, parseMessageCursor, requireText, tenantId } from './helpers';
+import { encodeMessageCursor, optionalText, pageParams, parseExpectedModeVersion, parseMessageCursor, requireText, tenantId } from './helpers';
 import { requireRole } from '../middleware/auth';
 import { assertContentAllowed } from '../services/contentAudit';
 
@@ -227,30 +227,19 @@ router.put('/:id/mode', requireRole('admin', 'operator'), async (req, res, next)
     const mode = req.body?.mode;
     if (!['human', 'ai_draft', 'auto'].includes(mode)) throw new AppError(400, 'INVALID_MODE', '会话模式无效');
     if (mode === 'auto' && req.auth!.role !== 'admin') throw new AppError(403, 'AUTO_MODE_FORBIDDEN', '只有管理员可以开启自动模式');
-    let expectedModeVersion: number | undefined;
-    if (req.body?.expectedModeVersion !== undefined) {
-      const parsed = Number(req.body.expectedModeVersion);
-      if (!Number.isInteger(parsed) || parsed < 1) throw new AppError(400, 'INVALID_MODE_VERSION', '会话模式版本无效');
-      expectedModeVersion = parsed;
-    }
+    const expectedModeVersion = parseExpectedModeVersion(req.body?.expectedModeVersion);
     if (mode === 'auto') {
       const knowledge = await query<{ count: string }>(`SELECT COUNT(*)::text AS count FROM knowledge_documents WHERE tenant_id = $1 AND status = 'published'`, [tenantId(req)]);
       if (Number(knowledge.rows[0]?.count || 0) === 0) throw new AppError(409, 'AUTO_MODE_REQUIRES_KNOWLEDGE', '发布企业知识后才能开启自动模式');
       const conversation = await getConversation(req.params.id, tenantId(req));
       if (!conversation.widget_id) throw new AppError(409, 'AUTO_MODE_PLATFORM_UNVERIFIED', '未核验的平台渠道不能开启自动发送');
     }
-    const values: unknown[] = [mode, req.params.id, tenantId(req)];
-    let versionFilter = '';
-    if (expectedModeVersion !== undefined) {
-      values.push(expectedModeVersion);
-      versionFilter = ` AND mode_version = $${values.length}`;
-    }
+    const values: unknown[] = [mode, req.params.id, tenantId(req), expectedModeVersion];
+    const versionFilter = ' AND mode_version = $4';
     const result = await query(`UPDATE conversations SET mode = $1, mode_version = mode_version + 1, updated_at = NOW() WHERE id = $2 AND tenant_id = $3${versionFilter} RETURNING id, mode, mode_version`, values);
     if (!result.rowCount) {
-      if (expectedModeVersion !== undefined) {
-        const existing = await query('SELECT 1 FROM conversations WHERE id = $1 AND tenant_id = $2', [req.params.id, tenantId(req)]);
-        if (existing.rowCount) throw new AppError(409, 'CONVERSATION_MODE_STALE', '会话模式已被其他操作更新，请重新读取后重试');
-      }
+      const existing = await query('SELECT 1 FROM conversations WHERE id = $1 AND tenant_id = $2', [req.params.id, tenantId(req)]);
+      if (existing.rowCount) throw new AppError(409, 'CONVERSATION_MODE_STALE', '会话模式已被其他操作更新，请重新读取后重试');
       throw new AppError(404, 'CONVERSATION_NOT_FOUND', '对话不存在');
     }
     await query(`INSERT INTO audit_logs(id, tenant_id, user_id, action, resource_type, resource_id, metadata) VALUES ($1, $2, $3, 'conversation_mode_changed', 'conversation', $4, $5::jsonb)`, [randomId(), tenantId(req), req.auth!.userId, req.params.id, JSON.stringify({ mode })]);

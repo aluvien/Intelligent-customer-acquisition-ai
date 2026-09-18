@@ -5,7 +5,7 @@ process.env.ENCRYPTION_KEY = Buffer.alloc(32, 7).toString('base64');
 
 const { decryptSecret, encryptSecret } = require('../dist/security/crypto');
 const { extractCozeText } = require('../dist/services/aiProvider');
-const { encodeMessageCursor, encodeVisitorMessageCursor, parseMessageCursor, parseVisitorMessageCursor } = require('../dist/routes/helpers');
+const { encodeMessageCursor, encodeVisitorMessageCursor, parseExpectedModeVersion, parseMessageCursor, parseVisitorMessageCursor } = require('../dist/routes/helpers');
 
 test('platform credentials are encrypted and decryptable', () => {
   const plaintext = 'provider-secret-value';
@@ -51,4 +51,14 @@ test('visitor cursors use visibility sequence and accept the legacy boundary', (
   const timestampOnly = Buffer.from(JSON.stringify({ createdAt: '2026-09-19 04:05:06.123900+00' }), 'utf8').toString('base64url');
   assert.deepEqual(parseVisitorMessageCursor(timestampOnly), { kind: 'createdAt', createdAt: '2026-09-19 04:05:06.123900+00', id: undefined });
   assert.throws(() => parseVisitorMessageCursor(encodeVisitorMessageCursor('9999999999999999999', 'message-overflow')));
+});
+
+test('conversation mode updates require a typed bounded version', () => {
+  assert.equal(parseExpectedModeVersion(1), 1);
+  for (const value of [undefined, null, true, false, '1', 0, -1, 1.5, Number.MAX_SAFE_INTEGER, 2_147_483_648]) {
+    assert.throws(
+      () => parseExpectedModeVersion(value),
+      (error) => error && error.code === 'INVALID_MODE_VERSION',
+    );
+  }
 });
