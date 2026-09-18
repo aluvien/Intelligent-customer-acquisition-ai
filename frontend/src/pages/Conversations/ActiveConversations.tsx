@@ -12,6 +12,7 @@ type Conversation = {
   userId: string;
   status: string;
   mode: string;
+  modeVersion: number;
   messageCount: number;
   lastMessageAt: string;
   latestMessage?: { content: string; direction: string } | null;
@@ -232,17 +233,38 @@ const ActiveConversations: React.FC = () => {
     if (!target) return;
     const conversationId = target.id;
     const requestId = ++modeRequestId.current;
+    const isCurrentRequest = () => requestId === modeRequestId.current && selectedConversationId.current === conversationId;
+    let expectedModeVersion = target.modeVersion;
     try {
-      await api.put(`/conversations/${conversationId}/mode`, { mode });
-      if (requestId !== modeRequestId.current || selectedConversationId.current !== conversationId) return;
+      let response: any;
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        try {
+          response = await api.put(`/conversations/${conversationId}/mode`, { mode, expectedModeVersion });
+          break;
+        } catch (err: any) {
+          const stale = err?.response?.status === 409 && err?.response?.data?.code === 'CONVERSATION_MODE_STALE';
+          if (!stale || attempt > 0 || !isCurrentRequest()) throw err;
+          const refreshed = await api.get(`/conversations/${conversationId}`);
+          if (!isCurrentRequest()) return;
+          const nextVersion = Number(refreshed.data.data.conversation?.modeVersion);
+          if (!Number.isInteger(nextVersion) || nextVersion < 1) throw err;
+          expectedModeVersion = nextVersion;
+        }
+      }
+      if (!response || !isCurrentRequest()) return;
       const current = selectedConversationRef.current;
       if (!current || current.id !== conversationId) return;
-      const updated = { ...current, mode };
+      const serverConversation = response.data.data.conversation || {};
+      const updated = {
+        ...current,
+        mode: serverConversation.mode || mode,
+        modeVersion: Number(serverConversation.modeVersion) || expectedModeVersion + 1,
+      };
       selectedConversationRef.current = updated;
-      setSelected((item) => item && item.id === conversationId ? { ...item, mode } : item);
+      setSelected((item) => item && item.id === conversationId ? updated : item);
       await loadConversations();
     } catch (err: any) {
-      if (requestId === modeRequestId.current && selectedConversationId.current === conversationId) {
+      if (isCurrentRequest()) {
         message.error(err?.response?.data?.message || '会话模式更新失败');
       }
     }

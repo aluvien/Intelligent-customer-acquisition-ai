@@ -3,26 +3,10 @@ import { Alert, Button, Card, Checkbox, Form, Input, Space, Typography, message 
 import { SendOutlined } from '@ant-design/icons';
 import { useParams } from 'react-router-dom';
 import api from '../services/api';
+import { compareChatMessages } from '../utils/messageOrdering';
 
 type Session = { sessionId: string; token: string; visitorId: string; expiresAt?: number };
 type ChatMessage = { id: string; direction: 'inbound' | 'outbound'; senderType: string; content: string; deliveryStatus: string; createdAt: string; visitorVisibilitySeq?: string };
-
-function compareDecimalStrings(left: string, right: string): number | undefined {
-  if (!/^\d+$/.test(left) || !/^\d+$/.test(right)) return undefined;
-  const normalizedLeft = left.replace(/^0+(?=\d)/, '');
-  const normalizedRight = right.replace(/^0+(?=\d)/, '');
-  if (normalizedLeft.length !== normalizedRight.length) return normalizedLeft.length < normalizedRight.length ? -1 : 1;
-  if (normalizedLeft === normalizedRight) return 0;
-  return normalizedLeft < normalizedRight ? -1 : 1;
-}
-
-function compareChatMessages(left: ChatMessage, right: ChatMessage): number {
-  if (left.visitorVisibilitySeq && right.visitorVisibilitySeq) {
-    const sequenceOrder = compareDecimalStrings(left.visitorVisibilitySeq, right.visitorVisibilitySeq);
-    if (sequenceOrder !== undefined && sequenceOrder !== 0) return sequenceOrder;
-  }
-  return left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id);
-}
 
 const ChatWidget: React.FC = () => {
   const { widgetId } = useParams<{ widgetId: string }>();
