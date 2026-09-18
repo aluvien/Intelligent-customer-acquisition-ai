@@ -46,6 +46,28 @@ router.post('/knowledge/:id/publish', requireRole('admin'), async (req, res, nex
   } catch (error) { next(error); }
 });
 
+router.get('/runs', async (req, res, next) => {
+  try {
+    const conversationId = typeof req.query.conversationId === 'string' ? req.query.conversationId.trim() : '';
+    if (!conversationId || conversationId.length > 100) throw new AppError(400, 'INVALID_INPUT', 'conversationId 无效');
+    const result = await query(`
+      SELECT r.id, r.conversation_id AS "conversationId", r.message_id AS "messageId", r.provider,
+             r.provider_request_id AS "providerRequestId", r.provider_conversation_id AS "providerConversationId",
+             r.status, r.draft, r.evidence, r.usage, r.error, r.created_at AS "createdAt", r.completed_at AS "completedAt"
+        FROM ai_runs r
+       WHERE r.tenant_id = $1 AND r.conversation_id = $2 AND r.status = 'succeeded'
+         AND r.draft IS NOT NULL AND length(trim(r.draft)) > 0
+         AND NOT EXISTS (
+           SELECT 1 FROM messages m
+            WHERE m.tenant_id = r.tenant_id AND m.conversation_id = r.conversation_id
+              AND m.direction = 'outbound'
+              AND (m.metadata->>'aiRunId' = r.id OR m.metadata->>'approvedAiRunId' = r.id)
+         )
+       ORDER BY r.created_at DESC LIMIT 100`, [tenantId(req), conversationId]);
+    res.json({ success: true, message: '获取待审批 AI 草稿成功', data: { runs: result.rows } });
+  } catch (error) { next(error); }
+});
+
 router.delete('/knowledge/:id', requireRole('admin'), async (req, res, next) => {
   try {
     const result = await query(`UPDATE knowledge_documents SET status = 'archived', updated_at = NOW() WHERE id = $1 AND tenant_id = $2 RETURNING id`, [req.params.id, tenantId(req)]);

@@ -73,6 +73,28 @@ const ActiveConversations: React.FC = () => {
       const nextMessages: ConversationMessage[] = response.data.data.messages || [];
       nextMessages.forEach((item) => messageIds.current.add(item.id));
       if (requestId === messageRequestId.current) setMessages(nextMessages);
+      try {
+        const draftResponse = await api.get('/ai/runs', { params: { conversationId: conversation.id } });
+        if (requestId === messageRequestId.current) {
+          const runs: AiDraft[] = (draftResponse.data.data.runs || []).map((run: any) => ({
+            aiRunId: run.id,
+            conversationId: run.conversationId,
+            draft: run.draft,
+            evidence: run.evidence,
+          }));
+          const recoveredIds = new Set(runs.map((run) => run.aiRunId));
+          setDrafts((items) => {
+            const next = { ...items };
+            Object.keys(next).forEach((id) => {
+              if (next[id].conversationId === conversation.id && !recoveredIds.has(id)) delete next[id];
+            });
+            runs.forEach((run) => { if (!next[run.aiRunId]) next[run.aiRunId] = run; });
+            return next;
+          });
+        }
+      } catch {
+        // Realtime draft notifications remain available if the recovery request fails.
+      }
     } catch (err: any) {
       message.error(err?.response?.data?.message || '消息加载失败');
     } finally {
