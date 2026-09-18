@@ -10,8 +10,8 @@ const mockUsers: User[] = [
   {
     id: '1',
     username: 'admin',
-    email: 'admin@linkbot-ai.com',
-    password: '$2a$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi', // password
+    email: 'admin@xinglian-yunke.com',
+    password: '$2b$10$YZmNcvLG63wrYxf/j.ODY.7b9Rkey0ItlWzWvAOSN0mOfXFjDQp3i', // admin123（初始密码，首次登录后请修改）
     role: 'admin',
     tenantId: 'tenant-1',
     status: 'active',
@@ -21,8 +21,8 @@ const mockUsers: User[] = [
   {
     id: '2',
     username: 'operator',
-    email: 'operator@linkbot-ai.com',
-    password: '$2a$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi', // password
+    email: 'operator@xinglian-yunke.com',
+    password: '$2b$10$/pRvtGq5lZ9291j/tfWSNO66R3nzXDafexjASfuvaajYryhEDIsy.', // operator123（初始密码，首次登录后请修改）
     role: 'operator',
     tenantId: 'tenant-1',
     status: 'active',
@@ -34,8 +34,8 @@ const mockUsers: User[] = [
 const mockTenants: Tenant[] = [
   {
     id: 'tenant-1',
-    name: 'LinkBot-AI 演示企业',
-    domain: 'demo.linkbot-ai.com',
+    name: '星链云客系统 演示企业',
+    domain: 'demo.xinglian-yunke.com',
     plan: 'pro',
     status: 'active',
     expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30天后
@@ -121,7 +121,7 @@ router.post('/login', async (req, res) => {
         role: user.role,
         tenantId: user.tenantId,
       },
-      process.env.JWT_SECRET || 'linkbot-ai-secret-key',
+      process.env.JWT_SECRET || 'xinglian-yunke-secret-key',
       { expiresIn: '7d' }
     );
 
@@ -206,7 +206,7 @@ router.post('/register', async (req, res) => {
     const newTenant: Tenant = {
       id: newUser.tenantId,
       name: tenantName || `${username}的企业`,
-      domain: `${username}.linkbot-ai.com`,
+      domain: `${username}.xinglian-yunke.com`,
       plan: 'basic',
       status: 'active',
       expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30天试用
@@ -226,7 +226,7 @@ router.post('/register', async (req, res) => {
         role: newUser.role,
         tenantId: newUser.tenantId,
       },
-      process.env.JWT_SECRET || 'linkbot-ai-secret-key',
+      process.env.JWT_SECRET || 'xinglian-yunke-secret-key',
       { expiresIn: '7d' }
     );
 
@@ -270,7 +270,7 @@ router.get('/me', (req, res) => {
     const token = authHeader.substring(7);
     
     // 验证 token
-    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'linkbot-ai-secret-key') as any;
+    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'xinglian-yunke-secret-key') as any;
     
     // 查找用户
     const user = mockUsers.find(u => u.id === decoded.userId);
@@ -314,7 +314,7 @@ router.post('/refresh', (req, res) => {
     const token = authHeader.substring(7);
     
     // 验证 token
-    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'linkbot-ai-secret-key') as any;
+    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'xinglian-yunke-secret-key') as any;
     
     // 生成新的 token
     const newToken = jwt.sign(
@@ -325,7 +325,7 @@ router.post('/refresh', (req, res) => {
         role: decoded.role,
         tenantId: decoded.tenantId,
       },
-      process.env.JWT_SECRET || 'linkbot-ai-secret-key',
+      process.env.JWT_SECRET || 'xinglian-yunke-secret-key',
       { expiresIn: '7d' }
     );
 
@@ -374,7 +374,7 @@ router.put('/password', async (req, res) => {
     }
 
     const token = authHeader.substring(7);
-    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'linkbot-ai-secret-key') as any;
+    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'xinglian-yunke-secret-key') as any;
     
     // 查找用户
     const user = mockUsers.find(u => u.id === decoded.userId);

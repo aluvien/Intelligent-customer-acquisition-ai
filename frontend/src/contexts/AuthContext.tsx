@@ -23,14 +23,21 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // 检查是否已登录
-    if (authService.isLoggedIn()) {
-      const storedUser = authService.getStoredUser();
-      if (storedUser) {
-        setUser(storedUser);
+    // 启动校验：有 token 则向服务端验证，过期/伪造 token 直接清掉
+    const init = async () => {
+      if (authService.isLoggedIn()) {
+        try {
+          const userData = await authService.getCurrentUser();
+          setUser(userData);
+          localStorage.setItem('user', JSON.stringify(userData));
+        } catch {
+          authService.logout();
+          setUser(null);
+        }
       }
-    }
-    setLoading(false);
+      setLoading(false);
+    };
+    init();
   }, []);
 
   const login = async (username: string, password: string) => {

@@ -12,8 +12,10 @@ import {
   QrcodeOutlined, RiseOutlined, ExclamationCircleOutlined
 } from '@ant-design/icons';
 import api from '../../services/api';
+import BusinessPageHeader from '../../components/BusinessPageHeader';
+import { BUSINESS_THEME } from '../../config/brand';
 
-const { Title, Text } = Typography;
+const { Text } = Typography;
 
 // 模拟多账号数据
 const mockAccounts = [
@@ -315,7 +317,7 @@ const DouyinPage: React.FC = () => {
       key: 'title',
       render: (text: string, record: any) => (
         <Space>
-          <PlayCircleOutlined style={{ color: record.status === 'live' ? '#52c41a' : '#999' }} />
+          <PlayCircleOutlined style={{ color: record.status === 'live' ? '#12A086' : BUSINESS_THEME.textSecondary }} />
           <span>{text}</span>
         </Space>
       ),
@@ -402,44 +404,35 @@ const DouyinPage: React.FC = () => {
   ];
 
   return (
-    <div style={{ padding: '24px' }}>
+    <div style={{ padding: '4px 0' }}>
       {/* 页面标题和操作 */}
-      <div style={{ marginBottom: '24px' }}>
-        <Row justify="space-between" align="middle">
-          <Col>
-            <Title level={4} style={{ margin: 0 }}>
-              <Space>
-                <GlobalOutlined />
-                抖音渠道管理
-                <Badge count={accounts.length} style={{ backgroundColor: '#52c41a' }} />
-              </Space>
-            </Title>
-            <Text type="secondary">管理抖音企业号接入配置和直播互动</Text>
-          </Col>
-          <Col>
-            <Space>
-              <Button 
-                type="primary" 
-                icon={<QrcodeOutlined />}
-                onClick={showQRCodeAuth}
-                style={{ background: '#ff6b35', borderColor: '#ff6b35' }}
-              >
-                抖音扫码授权
-              </Button>
-              <Button 
-                type="default" 
-                icon={<PlusOutlined />}
-                onClick={() => setIsAddModalVisible(true)}
-              >
-                手动添加
-              </Button>
-              <Button icon={<ReloadOutlined />} onClick={loadChannelData}>
-                刷新
-              </Button>
-            </Space>
-          </Col>
-        </Row>
-      </div>
+      <BusinessPageHeader
+        icon={<GlobalOutlined />}
+        title="抖音渠道管理"
+        subtitle="管理抖音企业号接入配置和直播互动"
+        extra={
+          <Space>
+            <Badge count={accounts.length} style={{ backgroundColor: '#12A086' }} />
+            <Button 
+              type="primary" 
+              icon={<QrcodeOutlined />}
+              onClick={showQRCodeAuth}
+            >
+              抖音扫码授权
+            </Button>
+            <Button 
+              type="default" 
+              icon={<PlusOutlined />}
+              onClick={() => setIsAddModalVisible(true)}
+            >
+              手动添加
+            </Button>
+            <Button icon={<ReloadOutlined />} onClick={loadChannelData}>
+              刷新
+            </Button>
+          </Space>
+        }
+      />
 
       {/* 账号列表 */}
       <Card title="账号管理" style={{ marginBottom: '24px' }}>
@@ -450,7 +443,7 @@ const DouyinPage: React.FC = () => {
                 size="small"
                 hoverable
                 style={{ 
-                  border: selectedAccount === account.id ? '2px solid #1890ff' : '1px solid #d9d9d9',
+                  border: selectedAccount === account.id ? `2px solid ${BUSINESS_THEME.primary}` : `1px solid ${BUSINESS_THEME.border}`,
                   cursor: 'pointer'
                 }}
                 onClick={() => setSelectedAccount(account.id)}
@@ -524,6 +517,7 @@ const DouyinPage: React.FC = () => {
                         handleConnectAccount(account.id);
                       }}
                       loading={loading}
+                      style={{ background: BUSINESS_THEME.primary, borderColor: BUSINESS_THEME.primary }}
                     >
                       连接账号
                     </Button>
@@ -546,11 +540,11 @@ const DouyinPage: React.FC = () => {
                   value={currentAccount.status === 'connected' ? '已连接' : '未连接'}
                   prefix={
                     currentAccount.status === 'connected' ? 
-                    <CheckCircleOutlined style={{ color: '#52c41a' }} /> : 
-                    <CloseCircleOutlined style={{ color: '#ff4d4f' }} />
+                    <CheckCircleOutlined style={{ color: '#12A086' }} /> : 
+                    <CloseCircleOutlined style={{ color: '#E5484D' }} />
                   }
                   valueStyle={{ 
-                    color: currentAccount.status === 'connected' ? '#52c41a' : '#ff4d4f' 
+                    color: currentAccount.status === 'connected' ? '#12A086' : '#E5484D' 
                   }}
                 />
               </Col>
@@ -559,7 +553,7 @@ const DouyinPage: React.FC = () => {
                   title="在线用户"
                   value={currentAccount.onlineUsers}
                   prefix={<UserOutlined />}
-                  valueStyle={{ color: '#1890ff' }}
+                  valueStyle={{ color: BUSINESS_THEME.primary }}
                 />
               </Col>
               <Col xs={24} sm={8}>
@@ -567,7 +561,7 @@ const DouyinPage: React.FC = () => {
                   title="今日消息"
                   value={currentAccount.messagesToday}
                   prefix={<MessageOutlined />}
-                  valueStyle={{ color: '#722ed1' }}
+                  valueStyle={{ color: BUSINESS_THEME.primary }}
                 />
               </Col>
             </Row>
@@ -576,6 +570,7 @@ const DouyinPage: React.FC = () => {
           {/* 直播管理 */}
           <Card title="直播管理" style={{ marginBottom: '24px' }}>
             <Table
+              scroll={{ x: 'max-content' }}
               columns={liveStreamColumns}
               dataSource={liveStreams}
               rowKey="id"
@@ -587,6 +582,7 @@ const DouyinPage: React.FC = () => {
           {/* 消息管理 */}
           <Card title="消息管理">
             <Table
+              scroll={{ x: 'max-content' }}
               columns={messageColumns}
               dataSource={messages}
               rowKey="id"
@@ -698,7 +694,7 @@ const DouyinPage: React.FC = () => {
       <Modal
         title={
           <Space>
-            <QrcodeOutlined style={{ color: '#ff6b35' }} />
+            <QrcodeOutlined style={{ color: BUSINESS_THEME.primary }} />
             抖音扫码授权
           </Space>
         }
@@ -708,7 +704,7 @@ const DouyinPage: React.FC = () => {
           <Button key="cancel" onClick={() => setQrModalVisible(false)}>
             取消
           </Button>,
-          <Button key="open" type="primary" onClick={handleDouyinAuth}>
+          <Button key="open" type="primary" onClick={handleDouyinAuth} style={{ background: BUSINESS_THEME.primary, borderColor: BUSINESS_THEME.primary }}>
             在新窗口打开
           </Button>,
         ]}
@@ -727,7 +723,7 @@ const DouyinPage: React.FC = () => {
             <QRCode
               value={authUrl}
               size={200}
-              color="#ff6b35"
+              color={BUSINESS_THEME.primary}
               style={{ margin: '0 auto' }}
             />
           </div>

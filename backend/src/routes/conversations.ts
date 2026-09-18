@@ -102,7 +102,7 @@ router.get('/', (req, res) => {
     const end = start + Number(limit);
     const paginatedConversations = filteredConversations.slice(start, end);
     
-    res.json({
+    return res.json({
       success: true,
       message: '获取对话列表成功',
       data: {
@@ -117,7 +117,7 @@ router.get('/', (req, res) => {
     } as ApiResponse);
   } catch (error) {
     console.error('获取对话列表错误:', error);
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       message: '服务器内部错误',
     } as ApiResponse);
@@ -137,14 +137,14 @@ router.get('/:id', (req, res) => {
       } as ApiResponse);
     }
     
-    res.json({
+    return res.json({
       success: true,
       message: '获取对话详情成功',
       data: { conversation },
     } as ApiResponse);
   } catch (error) {
     console.error('获取对话详情错误:', error);
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       message: '服务器内部错误',
     } as ApiResponse);
@@ -171,7 +171,7 @@ router.get('/:id/messages', (req, res) => {
     const end = start + Number(limit);
     const paginatedMessages = conversationMessages.slice(start, end);
     
-    res.json({
+    return res.json({
       success: true,
       message: '获取消息列表成功',
       data: {
@@ -186,7 +186,7 @@ router.get('/:id/messages', (req, res) => {
     } as ApiResponse);
   } catch (error) {
     console.error('获取消息列表错误:', error);
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       message: '服务器内部错误',
     } as ApiResponse);
@@ -222,14 +222,14 @@ router.post('/:id/messages', (req, res) => {
     conversation.lastMessageAt = new Date();
     conversation.messageCount += 1;
     
-    res.status(201).json({
+    return res.status(201).json({
       success: true,
       message: '发送消息成功',
       data: { message: newMessage },
     } as ApiResponse);
   } catch (error) {
     console.error('发送消息错误:', error);
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       message: '服务器内部错误',
     } as ApiResponse);
@@ -251,14 +251,14 @@ router.put('/:id/close', (req, res) => {
     
     conversation.status = 'closed';
     
-    res.json({
+    return res.json({
       success: true,
       message: '关闭对话成功',
       data: { conversation },
     } as ApiResponse);
   } catch (error) {
     console.error('关闭对话错误:', error);
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       message: '服务器内部错误',
     } as ApiResponse);
@@ -288,14 +288,14 @@ router.put('/:id/score', (req, res) => {
     
     conversation.score = score;
     
-    res.json({
+    return res.json({
       success: true,
       message: '更新评分成功',
       data: { conversation },
     } as ApiResponse);
   } catch (error) {
     console.error('更新评分错误:', error);
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       message: '服务器内部错误',
     } as ApiResponse);

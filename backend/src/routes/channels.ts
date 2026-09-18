@@ -45,7 +45,7 @@ router.get('/', (req, res) => {
     const end = start + Number(limit);
     const paginatedChannels = filteredChannels.slice(start, end);
     
-    res.json({
+    return res.json({
       success: true,
       message: '获取渠道列表成功',
       data: {
@@ -60,7 +60,7 @@ router.get('/', (req, res) => {
     } as ApiResponse);
   } catch (error) {
     console.error('获取渠道列表错误:', error);
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       message: '服务器内部错误',
     } as ApiResponse);
@@ -80,14 +80,14 @@ router.get('/:id', (req, res) => {
       } as ApiResponse);
     }
     
-    res.json({
+    return res.json({
       success: true,
       message: '获取渠道详情成功',
       data: { channel },
     } as ApiResponse);
   } catch (error) {
     console.error('获取渠道详情错误:', error);
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       message: '服务器内部错误',
     } as ApiResponse);
@@ -120,14 +120,14 @@ router.post('/', (req, res) => {
     
     mockChannels.push(newChannel);
     
-    res.status(201).json({
+    return res.status(201).json({
       success: true,
       message: '创建渠道成功',
       data: { channel: newChannel },
     } as ApiResponse);
   } catch (error) {
     console.error('创建渠道错误:', error);
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       message: '服务器内部错误',
     } as ApiResponse);
@@ -154,14 +154,14 @@ router.put('/:id', (req, res) => {
       config: config || mockChannels[channelIndex].config,
     };
     
-    res.json({
+    return res.json({
       success: true,
       message: '更新渠道成功',
       data: { channel: mockChannels[channelIndex] },
     } as ApiResponse);
   } catch (error) {
     console.error('更新渠道错误:', error);
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       message: '服务器内部错误',
     } as ApiResponse);
@@ -183,13 +183,13 @@ router.delete('/:id', (req, res) => {
     
     mockChannels.splice(channelIndex, 1);
     
-    res.json({
+    return res.json({
       success: true,
       message: '删除渠道成功',
     } as ApiResponse);
   } catch (error) {
     console.error('删除渠道错误:', error);
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       message: '服务器内部错误',
     } as ApiResponse);
@@ -209,7 +209,7 @@ router.get('/:id/status', (req, res) => {
       } as ApiResponse);
     }
     
-    res.json({
+    return res.json({
       success: true,
       message: '获取渠道状态成功',
       data: {
@@ -220,7 +220,7 @@ router.get('/:id/status', (req, res) => {
     } as ApiResponse);
   } catch (error) {
     console.error('获取渠道状态错误:', error);
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       message: '服务器内部错误',
     } as ApiResponse);

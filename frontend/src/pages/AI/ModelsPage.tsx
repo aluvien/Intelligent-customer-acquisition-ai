@@ -1,22 +1,24 @@
 import React from 'react';
-import { Card, Row, Col, Button, Table, Modal, Form, Input, Select, Switch, Space, message, Tag } from 'antd';
-import { PlusOutlined, EditOutlined, DeleteOutlined, RobotOutlined, SettingOutlined, ThunderboltOutlined } from '@ant-design/icons';
+import { Card, Button, Space } from 'antd';
+import { PlusOutlined, SettingOutlined, ThunderboltOutlined } from '@ant-design/icons';
+import BusinessEmptyState from '../../components/BusinessEmptyState';
+import { BUSINESS_THEME } from '../../config/brand';
 
 const ModelsPage: React.FC = () => {
   return (
-    <div style={{ padding: '24px' }}>
-      <div style={{ marginBottom: '24px' }}>
-        <h1 style={{ margin: 0, fontSize: '24px', fontWeight: 'bold' }}>
-          <ThunderboltOutlined style={{ marginRight: '8px', color: '#1890ff' }} />
-          大模型设置
+    <div style={{ padding: '4px 0' }}>
+      <div style={{ marginBottom: '20px' }}>
+        <h1 style={{ margin: 0, fontSize: '22px', fontWeight: 600, color: BUSINESS_THEME.textPrimary }}>
+          <ThunderboltOutlined style={{ marginRight: '8px', color: BUSINESS_THEME.primary }} />
+          模型配置
         </h1>
-        <p style={{ margin: '8px 0 0 0', color: '#666' }}>
-          配置AI大模型参数和智能回复策略
+        <p style={{ margin: '8px 0 0 0', color: BUSINESS_THEME.textSecondary, fontSize: 13 }}>
+          配置 AI 大模型参数与智能回复策略
         </p>
       </div>
 
-      <Card 
-        title="模型配置" 
+      <Card
+        title="模型配置"
         extra={
           <Space>
             <Button icon={<SettingOutlined />}>全局设置</Button>
@@ -24,10 +26,11 @@ const ModelsPage: React.FC = () => {
           </Space>
         }
       >
-        <div style={{ textAlign: 'center', padding: '60px 0', color: '#999' }}>
-          <ThunderboltOutlined style={{ fontSize: '48px', marginBottom: '16px' }} />
-          <p>大模型设置功能正在开发中</p>
-        </div>
+        <BusinessEmptyState
+          icon={<ThunderboltOutlined />}
+          title="大模型配置 · 规划中"
+          description="统一管理模型选型、温度与安全策略。当前为企业版规划模块，开通后可按场景灰度不同模型版本。"
+        />
       </Card>
     </div>
   );

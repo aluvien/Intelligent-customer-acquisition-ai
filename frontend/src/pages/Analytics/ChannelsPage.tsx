@@ -1,22 +1,24 @@
 import React from 'react';
-import { Card, Row, Col, Button, Space } from 'antd';
+import { Card, Button, Space } from 'antd';
 import { BarChartOutlined, PlusOutlined, SettingOutlined } from '@ant-design/icons';
+import BusinessEmptyState from '../../components/BusinessEmptyState';
+import { BUSINESS_THEME } from '../../config/brand';
 
 const ChannelsPage: React.FC = () => {
   return (
-    <div style={{ padding: '24px' }}>
-      <div style={{ marginBottom: '24px' }}>
-        <h1 style={{ margin: 0, fontSize: '24px', fontWeight: 'bold' }}>
-          <BarChartOutlined style={{ marginRight: '8px', color: '#1890ff' }} />
-          渠道对比
+    <div style={{ padding: '4px 0' }}>
+      <div style={{ marginBottom: '20px' }}>
+        <h1 style={{ margin: 0, fontSize: '22px', fontWeight: 600, color: BUSINESS_THEME.textPrimary }}>
+          <BarChartOutlined style={{ marginRight: '8px', color: BUSINESS_THEME.primary }} />
+          渠道对比分析
         </h1>
-        <p style={{ margin: '8px 0 0 0', color: '#666' }}>
+        <p style={{ margin: '8px 0 0 0', color: BUSINESS_THEME.textSecondary, fontSize: 13 }}>
           对比分析各渠道的运营数据
         </p>
       </div>
 
-      <Card 
-        title="渠道对比分析" 
+      <Card
+        title="渠道对比分析"
         extra={
           <Space>
             <Button icon={<SettingOutlined />}>设置</Button>
@@ -24,10 +26,11 @@ const ChannelsPage: React.FC = () => {
           </Space>
         }
       >
-        <div style={{ textAlign: 'center', padding: '60px 0', color: '#999' }}>
-          <BarChartOutlined style={{ fontSize: '48px', marginBottom: '16px' }} />
-          <p>渠道对比分析功能正在开发中</p>
-        </div>
+        <BusinessEmptyState
+          icon={<BarChartOutlined />}
+          title="渠道对比分析 · 规划中"
+          description="横向对比各渠道获客、留资与转化效果。当前为企业版规划模块，开通后支持自定义报表口径与下钻。"
+        />
       </Card>
     </div>
   );

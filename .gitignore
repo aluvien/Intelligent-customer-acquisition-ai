@@ -2,6 +2,8 @@
 .env
 .env.local
 .env.*.local
+.env.bak
+.env.*.bak
 backend/.env
 backend/.env.local
 
@@ -44,3 +46,10 @@ frontend/build/
 *.pem
 *.key
 *.cert
+
+# 编译产物（二进制）
+/live-im-proxy
+/linkbot-ai
+/main
+*.out
+*.test

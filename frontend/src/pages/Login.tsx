@@ -1,10 +1,9 @@
 import React, { useState } from 'react';
-import { Form, Input, Button, Card, Typography, message, Tabs, Checkbox } from 'antd';
-import { UserOutlined, LockOutlined, MailOutlined, TeamOutlined } from '@ant-design/icons';
+import { Form, Input, Button, Card, message, Tabs, Checkbox, Tag } from 'antd';
+import { UserOutlined, LockOutlined, MailOutlined, TeamOutlined, SafetyOutlined } from '@ant-design/icons';
 import { useAuth } from '../contexts/AuthContext';
 import { useNavigate, useLocation } from 'react-router-dom';
-
-const { Title, Text } = Typography;
+import { BRAND, BUSINESS_THEME } from '../config/brand';
 
 const Login: React.FC = () => {
   const [loginForm] = Form.useForm();
@@ -16,15 +15,13 @@ const Login: React.FC = () => {
 
   const from = (location.state as any)?.from?.pathname || '/';
 
-  // 页面加载时检查是否有记住的登录信息
+  // 页面加载时检查是否有记住的用户名（只记用户名，不记密码）
   React.useEffect(() => {
     const rememberedUsername = localStorage.getItem('rememberedUsername');
-    const rememberedPassword = localStorage.getItem('rememberedPassword');
-    
-    if (rememberedUsername && rememberedPassword) {
+
+    if (rememberedUsername) {
       loginForm.setFieldsValue({
         username: rememberedUsername,
-        password: rememberedPassword,
         remember: true
       });
     }
@@ -33,21 +30,20 @@ const Login: React.FC = () => {
   const handleLogin = async (values: any) => {
     setLoading(true);
     try {
-      // 如果选择了记住我，保存用户名和密码
+      // 记住我只保存用户名，明文密码永不持久化
       if (values.remember) {
         localStorage.setItem('rememberedUsername', values.username);
-        localStorage.setItem('rememberedPassword', values.password);
       } else {
         // 如果没有选择记住我，清除保存的信息
         localStorage.removeItem('rememberedUsername');
-        localStorage.removeItem('rememberedPassword');
       }
+      localStorage.removeItem('rememberedPassword');
 
       await login(values.username, values.password);
-      message.success('登录成功！');
+      message.success('登录成功，欢迎回来');
       navigate(from, { replace: true });
-    } catch (error) {
-      message.error('登录失败，请检查用户名和密码');
+    } catch (error: any) {
+      message.error(error?.response?.data?.message || error?.message || '登录失败，请检查用户名和密码');
     } finally {
       setLoading(false);
     }
@@ -62,7 +58,7 @@ const Login: React.FC = () => {
     setLoading(true);
     try {
       await register(values.username, values.email, values.password, values.confirmPassword, values.tenantName);
-      message.success('注册成功！');
+      message.success('注册成功，已为您开通企业试用空间');
       navigate(from, { replace: true });
     } catch (error) {
       message.error('注册失败，请检查输入信息');
@@ -75,26 +71,68 @@ const Login: React.FC = () => {
     <div style={{
       minHeight: '100vh',
       display: 'flex',
+      flexDirection: 'column',
       alignItems: 'center',
       justifyContent: 'center',
-      background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-      padding: '20px'
+      padding: '48px 20px 32px',
+      position: 'relative',
+      overflow: 'hidden',
+      background: '#EDF4F2',
     }}>
-      <Card style={{ width: 450, boxShadow: '0 8px 32px rgba(0,0,0,0.1)' }}>
-        <div style={{ textAlign: 'center', marginBottom: 24 }}>
-          <Title level={2} style={{ margin: 0, color: '#1890ff' }}>
-            LinkBot-AI
-          </Title>
-          <Text type="secondary">全域获客智能客服系统</Text>
-        </div>
+      {/* 背景装饰 */}
+      <div style={{
+        position: 'absolute', top: -180, left: '50%', transform: 'translateX(-50%)',
+        width: 720, height: 720, borderRadius: '50%',
+        background: 'radial-gradient(circle, rgba(14,124,107,0.14) 0%, rgba(14,124,107,0) 65%)',
+        pointerEvents: 'none',
+      }} />
+      <div style={{
+        position: 'absolute', bottom: -220, left: -160, width: 520, height: 520, borderRadius: '50%',
+        background: 'radial-gradient(circle, rgba(18,160,134,0.12) 0%, rgba(18,160,134,0) 65%)',
+        pointerEvents: 'none',
+      }} />
+      <div style={{
+        position: 'absolute', bottom: -200, right: -140, width: 480, height: 480, borderRadius: '50%',
+        background: 'radial-gradient(circle, rgba(14,124,107,0.10) 0%, rgba(14,124,107,0) 65%)',
+        pointerEvents: 'none',
+      }} />
 
-        <Tabs 
-          defaultActiveKey="login" 
+      {/* 顶部品牌 */}
+      <div style={{ position: 'relative', zIndex: 1, textAlign: 'center', marginBottom: 28 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 12 }}>
+          <span style={{
+            display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+            width: 48, height: 48, borderRadius: 14,
+            background: `linear-gradient(135deg, ${BUSINESS_THEME.primary} 0%, ${BUSINESS_THEME.primaryHover} 100%)`,
+            color: '#fff', fontWeight: 700, fontSize: 20,
+            boxShadow: '0 6px 20px rgba(14,124,107,0.4)',
+          }}>
+            {BRAND.shortCode}
+          </span>
+          <span style={{ textAlign: 'left' }}>
+            <span style={{ display: 'block', fontSize: 24, fontWeight: 700, color: BUSINESS_THEME.textPrimary, letterSpacing: 2 }}>
+              {BRAND.name}
+            </span>
+            <span style={{ display: 'block', fontSize: 10, letterSpacing: 4, color: BUSINESS_THEME.textSecondary }}>
+              {BRAND.englishName}
+            </span>
+          </span>
+          <Tag style={{ borderRadius: 20, marginLeft: 4 }} color="success">企业版</Tag>
+        </div>
+        <div style={{ marginTop: 10, fontSize: 13, color: BUSINESS_THEME.textSecondary }}>
+          {BRAND.subtitle} · {BRAND.description}
+        </div>
+      </div>
+
+      {/* 居中卡片 */}
+      <Card style={{ position: 'relative', zIndex: 1, width: 440, maxWidth: '100%', borderRadius: 16, boxShadow: '0 12px 40px rgba(26,43,40,0.10)' }}>
+        <Tabs
+          defaultActiveKey="login"
           centered
           items={[
             {
               key: 'login',
-              label: '登录',
+              label: '账号登录',
               children: (
                 <Form
                   form={loginForm}
@@ -126,7 +164,7 @@ const Login: React.FC = () => {
                   <Form.Item>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                       <Form.Item name="remember" valuePropName="checked" noStyle>
-                        <Checkbox>记住我</Checkbox>
+                        <Checkbox>记住用户名</Checkbox>
                       </Form.Item>
                       <Button type="link" style={{ padding: 0 }}>
                         忘记密码？
@@ -134,22 +172,31 @@ const Login: React.FC = () => {
                     </div>
                   </Form.Item>
 
-                  <Form.Item>
+                  <Form.Item style={{ marginBottom: 12 }}>
                     <Button
                       type="primary"
                       htmlType="submit"
                       loading={loading}
-                      style={{ width: '100%' }}
+                      style={{ width: '100%', height: 44, fontSize: 15, fontWeight: 600 }}
                     >
-                      登录
+                      登录工作台
                     </Button>
                   </Form.Item>
+                  <div style={{
+                    display: 'flex', alignItems: 'center', gap: 8,
+                    color: BUSINESS_THEME.textSecondary, fontSize: 12,
+                    background: BUSINESS_THEME.siderLogoBg, border: `1px solid ${BUSINESS_THEME.border}`,
+                    borderRadius: 8, padding: '8px 12px',
+                  }}>
+                    <SafetyOutlined />
+                    <span>企业数据加密传输，多租户安全隔离</span>
+                  </div>
                 </Form>
               )
             },
             {
               key: 'register',
-              label: '注册',
+              label: '企业注册',
               children: (
                 <Form
                   form={registerForm}
@@ -174,13 +221,13 @@ const Login: React.FC = () => {
                   <Form.Item
                     name="email"
                     rules={[
-                      { required: true, message: '请输入邮箱!' },
+                      { required: true, message: '请输入企业邮箱!' },
                       { type: 'email', message: '请输入有效的邮箱地址!' }
                     ]}
                   >
                     <Input
                       prefix={<MailOutlined />}
-                      placeholder="邮箱"
+                      placeholder="企业邮箱"
                     />
                   </Form.Item>
 
@@ -203,7 +250,7 @@ const Login: React.FC = () => {
                   >
                     <Input.Password
                       prefix={<LockOutlined />}
-                      placeholder="密码"
+                      placeholder="设置密码"
                     />
                   </Form.Item>
 
@@ -219,14 +266,14 @@ const Login: React.FC = () => {
                     />
                   </Form.Item>
 
-                  <Form.Item>
+                  <Form.Item style={{ marginBottom: 0 }}>
                     <Button
                       type="primary"
                       htmlType="submit"
                       loading={loading}
-                      style={{ width: '100%' }}
+                      style={{ width: '100%', height: 44, fontSize: 15, fontWeight: 600 }}
                     >
-                      注册
+                      注册并开通试用
                     </Button>
                   </Form.Item>
                 </Form>
@@ -235,6 +282,25 @@ const Login: React.FC = () => {
           ]}
         />
       </Card>
+
+      {/* 底部卖点 + 版权 */}
+      <div style={{
+        position: 'relative', zIndex: 1, marginTop: 24,
+        display: 'flex', gap: 10, flexWrap: 'wrap', justifyContent: 'center',
+      }}>
+        {['全渠道统一接入', 'AI 自动转化', '多租户安全隔离'].map(t => (
+          <span key={t} style={{
+            fontSize: 12, color: BUSINESS_THEME.siderText,
+            background: 'rgba(255,255,255,0.75)', border: `1px solid ${BUSINESS_THEME.border}`,
+            borderRadius: 20, padding: '4px 14px',
+          }}>
+            {t}
+          </span>
+        ))}
+      </div>
+      <div style={{ position: 'relative', zIndex: 1, marginTop: 14, fontSize: 12, color: BUSINESS_THEME.textSecondary }}>
+        {BRAND.copyright}
+      </div>
     </div>
   );
 };

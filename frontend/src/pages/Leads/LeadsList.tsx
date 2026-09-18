@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import api from '../../services/api';
 import {
   Card,
   Row,
@@ -53,6 +54,9 @@ import {
   DollarOutlined,
   StarOutlined,
 } from '@ant-design/icons';
+
+import BusinessPageHeader from '../../components/BusinessPageHeader';
+import { BUSINESS_THEME } from '../../config/brand';
 
 const { TextArea } = Input;
 const { Option } = Select;
@@ -208,9 +212,8 @@ const LeadsList: React.FC = () => {
   const loadLeads = async () => {
     setLoading(true);
     try {
-      // 调用真实API
-      const response = await fetch('/api/leads/data');
-      const result = await response.json();
+      // 调用真实API（经统一 api 实例，自动携带 token/租户头）
+      const result = await api.get('/leads/data').then(res => res.data);
       
       if (result.success) {
         setLeads(result.data.leads);
@@ -366,13 +369,14 @@ const LeadsList: React.FC = () => {
     {
       title: '线索信息',
       key: 'leadInfo',
+        width: 140,
       render: (record: any) => (
         <Space>
           <Avatar size="large" icon={<UserOutlined />} />
           <div>
             <div style={{ fontWeight: 'bold', fontSize: '16px' }}>{record.name}</div>
-            <div style={{ color: '#666', fontSize: '12px' }}>{record.company}</div>
-            <div style={{ color: '#999', fontSize: '12px' }}>{record.position}</div>
+            <div style={{ color: BUSINESS_THEME.textSecondary, fontSize: '12px' }}>{record.company}</div>
+            <div style={{ color: BUSINESS_THEME.textSecondary, fontSize: '12px' }}>{record.position}</div>
           </div>
         </Space>
       ),
@@ -380,10 +384,11 @@ const LeadsList: React.FC = () => {
     {
       title: '联系方式',
       key: 'contact',
+        width: 135,
       render: (record: any) => (
         <div>
           <div><PhoneOutlined /> {record.phone}</div>
-          <div><MailOutlined /> {record.email}</div>
+          <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 150 }}><MailOutlined /> {record.email}</div>
           <div><GlobalOutlined /> {record.location}</div>
         </div>
       ),
@@ -392,12 +397,14 @@ const LeadsList: React.FC = () => {
       title: '来源渠道',
       dataIndex: 'source',
       key: 'source',
+        width: 72,
       render: (source: string) => <Tag color="blue">{source}</Tag>,
     },
     {
       title: '状态',
       dataIndex: 'status',
       key: 'status',
+        width: 80,
       render: (status: string) => (
         <Badge 
           status={getStatusColor(status)} 
@@ -409,6 +416,7 @@ const LeadsList: React.FC = () => {
       title: '优先级',
       dataIndex: 'priority',
       key: 'priority',
+        width: 68,
       render: (priority: string) => (
         <Tag color={getPriorityColor(priority)}>
           {getPriorityText(priority)}
@@ -419,12 +427,14 @@ const LeadsList: React.FC = () => {
       title: '负责人',
       dataIndex: 'assignedTo',
       key: 'assignedTo',
+        width: 72,
       render: (assignedTo: string) => assignedTo || <Text type="secondary">未分配</Text>,
     },
     {
       title: '价值',
       dataIndex: 'value',
       key: 'value',
+        width: 88,
       render: (value: number) => (
         <Space>
           <DollarOutlined />
@@ -436,13 +446,14 @@ const LeadsList: React.FC = () => {
       title: '成交概率',
       dataIndex: 'probability',
       key: 'probability',
+        width: 88,
       render: (probability: number) => (
         <div>
           <Progress 
             percent={Math.round(probability * 100)} 
             size="small" 
             showInfo={false}
-            strokeColor={probability > 0.8 ? '#52c41a' : probability > 0.5 ? '#fa8c16' : '#ff4d4f'}
+            strokeColor={probability > 0.8 ? '#12A086' : probability > 0.5 ? '#D97706' : '#E5484D'}
           />
           <Text style={{ fontSize: '12px' }}>
             {Math.round(probability * 100)}%
@@ -454,13 +465,16 @@ const LeadsList: React.FC = () => {
       title: '最后联系',
       dataIndex: 'lastContact',
       key: 'lastContact',
+        width: 78,
       render: (time: string) => <Text type="secondary">{time}</Text>,
     },
     {
       title: '操作',
       key: 'action',
+        width: 165,
+        fixed: 'right' as const,
       render: (record: any) => (
-        <Space>
+        <Space wrap size={4}>
           <Button 
             type="link" 
             size="small" 
@@ -519,41 +533,33 @@ const LeadsList: React.FC = () => {
   });
 
   return (
-    <div style={{ padding: '24px' }}>
+    <div style={{ padding: '4px 0' }}>
       {/* 页面标题和操作 */}
-      <div style={{ marginBottom: '24px' }}>
-        <Row justify="space-between" align="middle">
-          <Col>
-            <h1 style={{ margin: 0, fontSize: '24px', fontWeight: 'bold' }}>
-              <TeamOutlined style={{ marginRight: '8px', color: '#1890ff' }} />
-              线索列表
-            </h1>
-            <p style={{ margin: '8px 0 0 0', color: '#666' }}>
-              管理所有销售线索，跟踪转化进度和跟进记录
-            </p>
-          </Col>
-          <Col>
-            <Space>
-              <Button icon={<ReloadOutlined />} onClick={loadLeads}>
-                刷新
-              </Button>
-              <Button icon={<ImportOutlined />}>导入</Button>
-              <Button icon={<ExportOutlined />}>导出</Button>
-              <Button 
-                type="primary" 
-                icon={<PlusOutlined />}
-                onClick={() => {
-                  setSelectedLead(null);
-                  leadForm.resetFields();
-                  setLeadModalVisible(true);
-                }}
-              >
-                新建线索
-              </Button>
-            </Space>
-          </Col>
-        </Row>
-      </div>
+      <BusinessPageHeader
+        icon={<TeamOutlined />}
+        title="线索管理"
+        subtitle="星链云客系统 · 管理所有销售线索，跟踪转化进度和跟进记录"
+        extra={
+          <Space>
+            <Button icon={<ReloadOutlined />} onClick={loadLeads}>
+              刷新
+            </Button>
+            <Button icon={<ImportOutlined />}>导入</Button>
+            <Button icon={<ExportOutlined />}>导出</Button>
+            <Button
+              type="primary"
+              icon={<PlusOutlined />}
+              onClick={() => {
+                setSelectedLead(null);
+                leadForm.resetFields();
+                setLeadModalVisible(true);
+              }}
+            >
+              新建线索
+            </Button>
+          </Space>
+        }
+      />
 
       {/* 统计卡片 */}
       <Row gutter={[16, 16]} style={{ marginBottom: '24px' }}>
@@ -563,7 +569,7 @@ const LeadsList: React.FC = () => {
               title="总线索数"
               value={leads.length}
               prefix={<TeamOutlined />}
-              valueStyle={{ color: '#1890ff' }}
+              valueStyle={{ color: BUSINESS_THEME.primary }}
             />
           </Card>
         </Col>
@@ -573,7 +579,7 @@ const LeadsList: React.FC = () => {
               title="新线索"
               value={leads.filter(l => l.status === 'new').length}
               prefix={<UserOutlined />}
-              valueStyle={{ color: '#52c41a' }}
+              valueStyle={{ color: '#12A086' }}
             />
           </Card>
         </Col>
@@ -583,7 +589,7 @@ const LeadsList: React.FC = () => {
               title="已确认"
               value={leads.filter(l => l.status === 'qualified').length}
               prefix={<CheckCircleOutlined />}
-              valueStyle={{ color: '#722ed1' }}
+              valueStyle={{ color: '#0A5A4F' }}
             />
           </Card>
         </Col>
@@ -593,7 +599,7 @@ const LeadsList: React.FC = () => {
               title="总价值"
               value={leads.reduce((acc, lead) => acc + lead.value, 0)}
               prefix={<DollarOutlined />}
-              valueStyle={{ color: '#fa8c16' }}
+              valueStyle={{ color: '#7FD1C0' }}
               formatter={(value) => `¥${value.toLocaleString()}`}
             />
           </Card>
@@ -667,12 +673,13 @@ const LeadsList: React.FC = () => {
       {/* 线索列表 */}
       <Card title="线索列表">
         <Table
+          size="small"
           columns={leadColumns}
           dataSource={filteredLeads}
           rowKey="id"
           loading={loading}
           pagination={{ pageSize: 10 }}
-          scroll={{ x: 1200 }}
+          scroll={{ x: 'max-content' }}
         />
       </Card>
 
@@ -691,8 +698,8 @@ const LeadsList: React.FC = () => {
                 <div style={{ textAlign: 'center' }}>
                   <Avatar size={80} icon={<UserOutlined />} />
                   <h2 style={{ margin: '16px 0 8px 0' }}>{selectedLead.name}</h2>
-                  <p style={{ color: '#666', margin: 0 }}>{selectedLead.company}</p>
-                  <p style={{ color: '#999', margin: 0 }}>{selectedLead.position}</p>
+                  <p style={{ color: BUSINESS_THEME.textSecondary, margin: 0 }}>{selectedLead.company}</p>
+                  <p style={{ color: BUSINESS_THEME.textSecondary, margin: 0 }}>{selectedLead.position}</p>
                 </div>
               </Col>
             </Row>
@@ -729,7 +736,7 @@ const LeadsList: React.FC = () => {
                 
                 <div>
                   <strong>备注:</strong>
-                  <div style={{ marginTop: '8px', padding: '8px', backgroundColor: '#f5f5f5', borderRadius: '4px' }}>
+                  <div style={{ marginTop: '8px', padding: '8px', backgroundColor: BUSINESS_THEME.contentBg, borderRadius: '4px' }}>
                     {selectedLead.notes}
                   </div>
                 </div>
@@ -748,10 +755,10 @@ const LeadsList: React.FC = () => {
                           <div style={{ fontWeight: 'bold' }}>
                             {getFollowUpTypeText(record.type)} - {record.user}
                           </div>
-                          <div style={{ color: '#666', marginTop: '4px' }}>
+                          <div style={{ color: BUSINESS_THEME.textSecondary, marginTop: '4px' }}>
                             {record.content}
                           </div>
-                          <div style={{ color: '#999', fontSize: '12px', marginTop: '4px' }}>
+                          <div style={{ color: BUSINESS_THEME.textSecondary, fontSize: '12px', marginTop: '4px' }}>
                             {record.time}
                           </div>
                         </div>

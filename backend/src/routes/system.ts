@@ -7,8 +7,8 @@ const router = express.Router();
 const mockTenants: Tenant[] = [
   {
     id: 'tenant-1',
-    name: 'LinkBot-AI 演示企业',
-    domain: 'demo.linkbot-ai.com',
+    name: '星链云客系统 演示企业',
+    domain: 'demo.xinglian-yunke.com',
     plan: 'pro',
     status: 'active',
     expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
@@ -107,7 +107,7 @@ router.get('/tenants', (req, res) => {
     const end = start + Number(limit);
     const paginatedTenants = filteredTenants.slice(start, end);
     
-    res.json({
+    return res.json({
       success: true,
       message: '获取租户列表成功',
       data: {
@@ -122,7 +122,7 @@ router.get('/tenants', (req, res) => {
     } as ApiResponse);
   } catch (error) {
     console.error('获取租户列表错误:', error);
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       message: '服务器内部错误',
     } as ApiResponse);
@@ -132,14 +132,14 @@ router.get('/tenants', (req, res) => {
 // 获取计费套餐
 router.get('/billing/plans', (req, res) => {
   try {
-    res.json({
+    return res.json({
       success: true,
       message: '获取计费套餐成功',
       data: { plans: mockBillingPlans },
     } as ApiResponse);
   } catch (error) {
     console.error('获取计费套餐错误:', error);
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       message: '服务器内部错误',
     } as ApiResponse);
@@ -161,7 +161,7 @@ router.get('/billing/subscription', (req, res) => {
     
     const plan = mockBillingPlans.find(p => p.id === subscription.planId);
     
-    res.json({
+    return res.json({
       success: true,
       message: '获取订阅信息成功',
       data: {
@@ -173,7 +173,7 @@ router.get('/billing/subscription', (req, res) => {
     } as ApiResponse);
   } catch (error) {
     console.error('获取订阅信息错误:', error);
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       message: '服务器内部错误',
     } as ApiResponse);
@@ -207,7 +207,7 @@ router.post('/billing/subscribe', (req, res) => {
     
     mockSubscriptions.push(newSubscription);
     
-    res.status(201).json({
+    return res.status(201).json({
       success: true,
       message: '订阅创建成功',
       data: {
@@ -219,7 +219,7 @@ router.post('/billing/subscribe', (req, res) => {
     } as ApiResponse);
   } catch (error) {
     console.error('创建订阅错误:', error);
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       message: '服务器内部错误',
     } as ApiResponse);
@@ -241,14 +241,14 @@ router.put('/billing/cancel', (req, res) => {
     
     subscription.cancelAtPeriodEnd = true;
     
-    res.json({
+    return res.json({
       success: true,
       message: '订阅已取消，将在当前周期结束后生效',
       data: { subscription },
     } as ApiResponse);
   } catch (error) {
     console.error('取消订阅错误:', error);
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       message: '服务器内部错误',
     } as ApiResponse);
@@ -275,14 +275,14 @@ router.get('/monitoring', (req, res) => {
       version: '1.0.0',
     };
     
-    res.json({
+    return res.json({
       success: true,
       message: '获取系统监控成功',
       data: monitoring,
     } as ApiResponse);
   } catch (error) {
     console.error('获取系统监控错误:', error);
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       message: '服务器内部错误',
     } as ApiResponse);
@@ -327,7 +327,7 @@ router.get('/logs', (req, res) => {
     const end = start + Number(limit);
     const paginatedLogs = filteredLogs.slice(start, end);
     
-    res.json({
+    return res.json({
       success: true,
       message: '获取系统日志成功',
       data: {
@@ -342,7 +342,7 @@ router.get('/logs', (req, res) => {
     } as ApiResponse);
   } catch (error) {
     console.error('获取系统日志错误:', error);
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       message: '服务器内部错误',
     } as ApiResponse);

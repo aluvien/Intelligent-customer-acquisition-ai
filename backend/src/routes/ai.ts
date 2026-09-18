@@ -60,7 +60,7 @@ router.get('/intents', (req, res) => {
     const end = start + Number(limit);
     const paginatedIntents = filteredIntents.slice(start, end);
     
-    res.json({
+    return res.json({
       success: true,
       message: '获取意图列表成功',
       data: {
@@ -75,7 +75,7 @@ router.get('/intents', (req, res) => {
     } as ApiResponse);
   } catch (error) {
     console.error('获取意图列表错误:', error);
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       message: '服务器内部错误',
     } as ApiResponse);
@@ -100,14 +100,14 @@ router.post('/intents', (req, res) => {
     
     mockIntents.push(newIntent);
     
-    res.status(201).json({
+    return res.status(201).json({
       success: true,
       message: '创建意图成功',
       data: { intent: newIntent },
     } as ApiResponse);
   } catch (error) {
     console.error('创建意图错误:', error);
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       message: '服务器内部错误',
     } as ApiResponse);
@@ -117,14 +117,14 @@ router.post('/intents', (req, res) => {
 // 获取 AI 模型列表
 router.get('/models', (req, res) => {
   try {
-    res.json({
+    return res.json({
       success: true,
       message: '获取AI模型列表成功',
       data: { models: mockAIModels },
     } as ApiResponse);
   } catch (error) {
     console.error('获取AI模型列表错误:', error);
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       message: '服务器内部错误',
     } as ApiResponse);
@@ -207,7 +207,7 @@ router.post('/reply', async (req, res) => {
     }
   } catch (error) {
     console.error('AI回复错误:', error);
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       message: '服务器内部错误',
     } as ApiResponse);
@@ -234,7 +234,7 @@ router.post('/audit', async (req, res) => {
     
     const isBlocked = detectedWords.length > 0;
     
-    res.json({
+    return res.json({
       success: true,
       message: '内容审核完成',
       data: {
@@ -246,7 +246,7 @@ router.post('/audit', async (req, res) => {
     } as ApiResponse);
   } catch (error) {
     console.error('内容审核错误:', error);
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       message: '服务器内部错误',
     } as ApiResponse);
@@ -261,7 +261,7 @@ router.get('/stats', (req, res) => {
     const totalModels = mockAIModels.length;
     const activeModels = mockAIModels.filter(m => m.isActive).length;
     
-    res.json({
+    return res.json({
       success: true,
       message: '获取AI统计成功',
       data: {
@@ -275,7 +275,7 @@ router.get('/stats', (req, res) => {
     } as ApiResponse);
   } catch (error) {
     console.error('获取AI统计错误:', error);
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       message: '服务器内部错误',
     } as ApiResponse);

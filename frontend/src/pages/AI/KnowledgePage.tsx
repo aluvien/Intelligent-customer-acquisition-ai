@@ -1,22 +1,24 @@
 import React from 'react';
-import { Card, Row, Col, Button, Table, Modal, Form, Input, Select, Switch, Space, message, Tag } from 'antd';
-import { PlusOutlined, EditOutlined, DeleteOutlined, RobotOutlined, BookOutlined, SettingOutlined } from '@ant-design/icons';
+import { Card, Button, Space } from 'antd';
+import { BookOutlined, PlusOutlined, SettingOutlined } from '@ant-design/icons';
+import BusinessEmptyState from '../../components/BusinessEmptyState';
+import { BUSINESS_THEME } from '../../config/brand';
 
 const KnowledgePage: React.FC = () => {
   return (
-    <div style={{ padding: '24px' }}>
-      <div style={{ marginBottom: '24px' }}>
-        <h1 style={{ margin: 0, fontSize: '24px', fontWeight: 'bold' }}>
-          <BookOutlined style={{ marginRight: '8px', color: '#1890ff' }} />
-          知识图谱 FAQ
+    <div style={{ padding: '4px 0' }}>
+      <div style={{ marginBottom: '20px' }}>
+        <h1 style={{ margin: 0, fontSize: '22px', fontWeight: 600, color: BUSINESS_THEME.textPrimary }}>
+          <BookOutlined style={{ marginRight: '8px', color: BUSINESS_THEME.primary }} />
+          知识库管理
         </h1>
-        <p style={{ margin: '8px 0 0 0', color: '#666' }}>
-          管理AI知识库和常见问题解答
+        <p style={{ margin: '8px 0 0 0', color: BUSINESS_THEME.textSecondary, fontSize: 13 }}>
+          管理 AI 知识库与常见问题解答
         </p>
       </div>
 
-      <Card 
-        title="知识库管理" 
+      <Card
+        title="知识库管理"
         extra={
           <Space>
             <Button icon={<SettingOutlined />}>全局设置</Button>
@@ -24,10 +26,11 @@ const KnowledgePage: React.FC = () => {
           </Space>
         }
       >
-        <div style={{ textAlign: 'center', padding: '60px 0', color: '#999' }}>
-          <BookOutlined style={{ fontSize: '48px', marginBottom: '16px' }} />
-          <p>知识图谱 FAQ 功能正在开发中</p>
-        </div>
+        <BusinessEmptyState
+          icon={<BookOutlined />}
+          title="企业知识库 · 规划中"
+          description="结构化沉淀企业话术与 FAQ，支撑 AI 准确回复。当前为企业版规划模块，开通后可按租户管理知识版本与生效范围。"
+        />
       </Card>
     </div>
   );

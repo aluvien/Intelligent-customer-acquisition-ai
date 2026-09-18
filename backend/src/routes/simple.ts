@@ -6,7 +6,7 @@ const router = express.Router();
 router.get('/health', (req, res) => {
   res.json({
     success: true,
-    message: 'LinkBot-AI 后端服务运行正常',
+    message: '星链云客系统 后端服务运行正常',
     data: {
       timestamp: new Date().toISOString(),
       version: '1.0.0',
@@ -14,59 +14,7 @@ router.get('/health', (req, res) => {
   });
 });
 
-// 模拟抖音OAuth授权回调
-router.get('/auth/douyin/oauth/callback', (req, res) => {
-  const { code, state } = req.query;
-  
-  // 模拟返回授权成功
-  res.json({
-    success: true,
-    message: '授权成功',
-    data: {
-      access_token: `mock_token_${Date.now()}`,
-      refresh_token: `mock_refresh_${Date.now()}`,
-      expires_in: 7200,
-      user_info: {
-        open_id: 'mock_open_123',
-        union_id: 'mock_union_123',
-        nickname: '测试抖音账号',
-        avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Douyin',
-      },
-    },
-  });
-});
-
-// 简化的登录接口
-router.post('/auth/login', (req, res) => {
-  const { username, password } = req.body;
-  
-  if (username === 'admin' && password === 'admin123') {
-    res.json({
-      success: true,
-      message: '登录成功',
-      data: {
-        token: 'mock-token-123',
-        user: {
-          id: '1',
-          username: 'admin',
-          email: 'admin@linkbot-ai.com',
-          role: 'admin',
-          tenantId: 'tenant-1',
-        },
-        tenant: {
-          id: 'tenant-1',
-          name: 'LinkBot-AI 演示企业',
-          plan: 'pro',
-        },
-      },
-    });
-  } else {
-    res.status(401).json({
-      success: false,
-      message: '用户名或密码错误',
-    });
-  }
-});
+// 注：登录与抖音 OAuth 回调已迁移到 routes/auth.ts（bcrypt + JWT），此处不再重复挂载。
 
 // 抖音OAuth授权 - 获取授权URL
 router.get('/channels/douyin/oauth/url', async (req, res) => {

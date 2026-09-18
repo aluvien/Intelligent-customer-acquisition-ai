@@ -67,7 +67,7 @@ router.get('/', (req, res) => {
     const end = start + Number(limit);
     const paginatedLeads = filteredLeads.slice(start, end);
     
-    res.json({
+    return res.json({
       success: true,
       message: '获取线索列表成功',
       data: {
@@ -82,7 +82,7 @@ router.get('/', (req, res) => {
     } as ApiResponse);
   } catch (error) {
     console.error('获取线索列表错误:', error);
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       message: '服务器内部错误',
     } as ApiResponse);
@@ -102,14 +102,14 @@ router.get('/:id', (req, res) => {
       } as ApiResponse);
     }
     
-    res.json({
+    return res.json({
       success: true,
       message: '获取线索详情成功',
       data: { lead },
     } as ApiResponse);
   } catch (error) {
     console.error('获取线索详情错误:', error);
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       message: '服务器内部错误',
     } as ApiResponse);
@@ -140,14 +140,14 @@ router.post('/', (req, res) => {
     
     mockLeads.push(newLead);
     
-    res.status(201).json({
+    return res.status(201).json({
       success: true,
       message: '创建线索成功',
       data: { lead: newLead },
     } as ApiResponse);
   } catch (error) {
     console.error('创建线索错误:', error);
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       message: '服务器内部错误',
     } as ApiResponse);
@@ -178,14 +178,14 @@ router.put('/:id', (req, res) => {
       updatedAt: new Date(),
     };
     
-    res.json({
+    return res.json({
       success: true,
       message: '更新线索成功',
       data: { lead: mockLeads[leadIndex] },
     } as ApiResponse);
   } catch (error) {
     console.error('更新线索错误:', error);
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       message: '服务器内部错误',
     } as ApiResponse);
@@ -210,14 +210,14 @@ router.put('/:id/assign', (req, res) => {
     mockLeads[leadIndex].status = 'contacted';
     mockLeads[leadIndex].updatedAt = new Date();
     
-    res.json({
+    return res.json({
       success: true,
       message: '分配线索成功',
       data: { lead: mockLeads[leadIndex] },
     } as ApiResponse);
   } catch (error) {
     console.error('分配线索错误:', error);
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       message: '服务器内部错误',
     } as ApiResponse);
@@ -234,7 +234,7 @@ router.get('/stats/overview', (req, res) => {
     const converted = mockLeads.filter(l => l.status === 'converted').length;
     const highScore = mockLeads.filter(l => l.score >= 7).length;
     
-    res.json({
+    return res.json({
       success: true,
       message: '获取线索统计成功',
       data: {
@@ -249,7 +249,7 @@ router.get('/stats/overview', (req, res) => {
     } as ApiResponse);
   } catch (error) {
     console.error('获取线索统计错误:', error);
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       message: '服务器内部错误',
     } as ApiResponse);

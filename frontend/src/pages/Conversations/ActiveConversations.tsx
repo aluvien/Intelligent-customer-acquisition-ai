@@ -47,6 +47,9 @@ import {
   DeleteOutlined,
 } from '@ant-design/icons';
 
+import BusinessPageHeader from '../../components/BusinessPageHeader';
+import { BUSINESS_THEME } from '../../config/brand';
+
 const { TextArea } = Input;
 const { Option } = Select;
 const { Text, Paragraph } = Typography;
@@ -274,27 +277,19 @@ const ActiveConversations: React.FC = () => {
   });
 
   return (
-    <div style={{ padding: '24px' }}>
+    <div style={{ padding: '4px 0' }}>
       {/* 页面标题和统计 */}
-      <div style={{ marginBottom: '24px' }}>
-        <Row justify="space-between" align="middle">
-          <Col>
-            <h1 style={{ margin: 0, fontSize: '24px', fontWeight: 'bold' }}>
-              <MessageOutlined style={{ marginRight: '8px', color: '#1890ff' }} />
-              进行中对话
-            </h1>
-            <p style={{ margin: '8px 0 0 0', color: '#666' }}>
-              管理所有进行中的客户对话，提供实时客服支持
-            </p>
-          </Col>
-          <Col>
-            <Space>
-              <Button icon={<ThunderboltOutlined />}>AI助手</Button>
-              <Button type="primary" icon={<MessageOutlined />}>新建对话</Button>
-            </Space>
-          </Col>
-        </Row>
-      </div>
+      <BusinessPageHeader
+        icon={<MessageOutlined />}
+        title="进行中对话"
+        subtitle="星链云客系统 · 管理所有进行中的客户对话，提供实时客服支持"
+        extra={
+          <Space>
+            <Button icon={<ThunderboltOutlined />}>AI助手</Button>
+            <Button type="primary" icon={<MessageOutlined />}>新建对话</Button>
+          </Space>
+        }
+      />
 
       {/* 统计卡片 */}
       <Row gutter={[16, 16]} style={{ marginBottom: '24px' }}>
@@ -304,7 +299,7 @@ const ActiveConversations: React.FC = () => {
               title="总对话数"
               value={conversations.length}
               prefix={<MessageOutlined />}
-              valueStyle={{ color: '#1890ff' }}
+              valueStyle={{ color: BUSINESS_THEME.primary }}
             />
           </Card>
         </Col>
@@ -314,7 +309,7 @@ const ActiveConversations: React.FC = () => {
               title="进行中"
               value={conversations.filter(c => c.status === 'active').length}
               prefix={<EyeOutlined />}
-              valueStyle={{ color: '#52c41a' }}
+              valueStyle={{ color: '#12A086' }}
             />
           </Card>
         </Col>
@@ -324,7 +319,7 @@ const ActiveConversations: React.FC = () => {
               title="等待中"
               value={conversations.filter(c => c.status === 'waiting').length}
               prefix={<ClockCircleOutlined />}
-              valueStyle={{ color: '#fa8c16' }}
+              valueStyle={{ color: '#D97706' }}
             />
           </Card>
         </Col>
@@ -334,7 +329,7 @@ const ActiveConversations: React.FC = () => {
               title="平均满意度"
               value={4.2}
               prefix={<Rate disabled defaultValue={4} />}
-              valueStyle={{ color: '#722ed1' }}
+              valueStyle={{ color: BUSINESS_THEME.primary }}
               suffix="/5"
             />
           </Card>
@@ -347,37 +342,38 @@ const ActiveConversations: React.FC = () => {
           <Card 
             title="对话列表" 
             extra={
-              <Space>
-                <Input
-                  placeholder="搜索对话..."
-                  prefix={<SearchOutlined />}
-                  value={searchText}
-                  onChange={(e) => setSearchText(e.target.value)}
-                  style={{ width: 200 }}
-                />
-                <Select
-                  value={statusFilter}
-                  onChange={setStatusFilter}
-                  style={{ width: 100 }}
-                >
-                  <Option value="all">全部</Option>
-                  <Option value="active">进行中</Option>
-                  <Option value="waiting">等待中</Option>
-                  <Option value="closed">已结束</Option>
-                </Select>
-                <Select
-                  value={priorityFilter}
-                  onChange={setPriorityFilter}
-                  style={{ width: 100 }}
-                >
-                  <Option value="all">优先级</Option>
-                  <Option value="high">高</Option>
-                  <Option value="medium">中</Option>
-                  <Option value="low">低</Option>
-                </Select>
-              </Space>
+              <Text type="secondary">{filteredConversations.length} 个会话</Text>
             }
           >
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 12 }}>
+              <Input
+                placeholder="搜索对话..."
+                prefix={<SearchOutlined />}
+                value={searchText}
+                onChange={(e) => setSearchText(e.target.value)}
+                style={{ width: 200, flex: '1 1 160px' }}
+              />
+              <Select
+                value={statusFilter}
+                onChange={setStatusFilter}
+                style={{ width: 110 }}
+              >
+                <Option value="all">全部</Option>
+                <Option value="active">进行中</Option>
+                <Option value="waiting">等待中</Option>
+                <Option value="closed">已结束</Option>
+              </Select>
+              <Select
+                value={priorityFilter}
+                onChange={setPriorityFilter}
+                style={{ width: 110 }}
+              >
+                <Option value="all">优先级</Option>
+                <Option value="high">高</Option>
+                <Option value="medium">中</Option>
+                <Option value="low">低</Option>
+              </Select>
+            </div>
             <List
               dataSource={filteredConversations}
               loading={loading}
@@ -385,10 +381,11 @@ const ActiveConversations: React.FC = () => {
                 <List.Item
                   style={{
                     cursor: 'pointer',
-                    backgroundColor: selectedConversation?.id === conversation.id ? '#f0f8ff' : 'transparent',
+                    backgroundColor: selectedConversation?.id === conversation.id ? BUSINESS_THEME.primaryActiveBg : '#FFFFFF',
                     padding: '12px',
                     borderRadius: '6px',
                     marginBottom: '8px',
+                    border: selectedConversation?.id === conversation.id ? `1px solid ${BUSINESS_THEME.primary}` : `1px solid ${BUSINESS_THEME.border}`,
                   }}
                   onClick={() => handleConversationSelect(conversation)}
                 >
@@ -396,7 +393,7 @@ const ActiveConversations: React.FC = () => {
                     avatar={
                       <Badge 
                         dot={conversation.status === 'active'} 
-                        color={conversation.status === 'active' ? '#52c41a' : '#999'}
+                        color={conversation.status === 'active' ? '#12A086' : BUSINESS_THEME.textSecondary}
                       >
                         <Avatar src={conversation.user.avatar} icon={<UserOutlined />} />
                       </Badge>
@@ -417,7 +414,7 @@ const ActiveConversations: React.FC = () => {
                       <div>
                         <Paragraph 
                           ellipsis={{ rows: 2 }} 
-                          style={{ margin: 0, color: '#666' }}
+                          style={{ margin: 0, color: BUSINESS_THEME.textSecondary }}
                         >
                           {conversation.lastMessage.content}
                         </Paragraph>
@@ -503,7 +500,7 @@ const ActiveConversations: React.FC = () => {
                             maxWidth: '70%',
                             padding: '8px 12px',
                             borderRadius: '12px',
-                            backgroundColor: message.isFromUser ? '#1890ff' : '#f5f5f5',
+                            backgroundColor: message.isFromUser ? BUSINESS_THEME.primary : BUSINESS_THEME.contentBg,
                             color: message.isFromUser ? '#fff' : '#000',
                           }}
                         >
@@ -511,7 +508,7 @@ const ActiveConversations: React.FC = () => {
                             <Text 
                               style={{ 
                                 fontSize: '12px', 
-                                color: message.isFromUser ? '#fff' : '#999' 
+                                color: message.isFromUser ? '#fff' : BUSINESS_THEME.textSecondary 
                               }}
                             >
                               {message.sender} · {message.time}
@@ -614,7 +611,7 @@ const ActiveConversations: React.FC = () => {
                     <h4>智能回复建议:</h4>
                     <Card size="small">
                       <p>根据客户询问的产品价格问题，建议回复：</p>
-                      <p style={{ color: '#1890ff', fontStyle: 'italic' }}>
+                      <p style={{ color: BUSINESS_THEME.primary, fontStyle: 'italic' }}>
                         "感谢您的咨询！我们的产品价格根据配置不同有所差异，基础版2999元，专业版5999元，企业版9999元。我可以为您详细介绍各版本的功能特点，帮助您选择最适合的方案。"
                       </p>
                     </Card>
@@ -633,8 +630,8 @@ const ActiveConversations: React.FC = () => {
             </Card>
           ) : (
             <Card style={{ textAlign: 'center', padding: '60px 0' }}>
-              <MessageOutlined style={{ fontSize: '48px', color: '#d9d9d9', marginBottom: '16px' }} />
-              <p style={{ color: '#999', fontSize: '16px' }}>请选择一个对话查看详情</p>
+              <MessageOutlined style={{ fontSize: '48px', color: BUSINESS_THEME.border, marginBottom: '16px' }} />
+              <p style={{ color: BUSINESS_THEME.textSecondary, fontSize: '16px' }}>请选择一个对话查看详情</p>
             </Card>
           )}
         </Col>

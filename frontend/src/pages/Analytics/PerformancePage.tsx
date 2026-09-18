@@ -1,22 +1,24 @@
 import React from 'react';
-import { Card, Row, Col, Button, Space } from 'antd';
+import { Card, Button, Space } from 'antd';
 import { BarChartOutlined, PlusOutlined, SettingOutlined } from '@ant-design/icons';
+import BusinessEmptyState from '../../components/BusinessEmptyState';
+import { BUSINESS_THEME } from '../../config/brand';
 
 const PerformancePage: React.FC = () => {
   return (
-    <div style={{ padding: '24px' }}>
-      <div style={{ marginBottom: '24px' }}>
-        <h1 style={{ margin: 0, fontSize: '24px', fontWeight: 'bold' }}>
-          <BarChartOutlined style={{ marginRight: '8px', color: '#1890ff' }} />
+    <div style={{ padding: '4px 0' }}>
+      <div style={{ marginBottom: '20px' }}>
+        <h1 style={{ margin: 0, fontSize: '22px', fontWeight: 600, color: BUSINESS_THEME.textPrimary }}>
+          <BarChartOutlined style={{ marginRight: '8px', color: BUSINESS_THEME.primary }} />
           客服绩效
         </h1>
-        <p style={{ margin: '8px 0 0 0', color: '#666' }}>
-          分析客服团队的工作绩效和效率
+        <p style={{ margin: '8px 0 0 0', color: BUSINESS_THEME.textSecondary, fontSize: 13 }}>
+          分析客服团队的工作绩效与效率
         </p>
       </div>
 
-      <Card 
-        title="客服绩效分析" 
+      <Card
+        title="客服绩效分析"
         extra={
           <Space>
             <Button icon={<SettingOutlined />}>设置</Button>
@@ -24,10 +26,11 @@ const PerformancePage: React.FC = () => {
           </Space>
         }
       >
-        <div style={{ textAlign: 'center', padding: '60px 0', color: '#999' }}>
-          <BarChartOutlined style={{ fontSize: '48px', marginBottom: '16px' }} />
-          <p>客服绩效分析功能正在开发中</p>
-        </div>
+        <BusinessEmptyState
+          icon={<BarChartOutlined />}
+          title="客服绩效 · 规划中"
+          description="统计响应时长、解决率与转化贡献。当前为企业版规划模块，开通后支持按人员、班组多维考核。"
+        />
       </Card>
     </div>
   );

@@ -48,10 +48,45 @@ import BillingPage from './pages/System/BillingPage';
 import MonitoringPage from './pages/System/MonitoringPage';
 
 import 'antd/dist/reset.css';
+import { BRAND, BUSINESS_THEME } from './config/brand';
 
 const App: React.FC = () => {
   return (
-    <ConfigProvider locale={zhCN}>
+    <ConfigProvider
+      locale={zhCN}
+      theme={{
+        token: {
+          colorPrimary: BUSINESS_THEME.primary,
+          colorLink: BUSINESS_THEME.primary,
+          borderRadius: 10,
+          fontFamily: `-apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Segoe UI', Roboto, sans-serif`,
+        },
+        components: {
+          Layout: {
+            siderBg: BUSINESS_THEME.siderBg,
+            headerBg: BUSINESS_THEME.headerBg,
+            bodyBg: BUSINESS_THEME.contentBg,
+          },
+          Menu: {
+            itemBg: BUSINESS_THEME.siderBg,
+            itemSelectedBg: BUSINESS_THEME.primaryActiveBg,
+            itemSelectedColor: BUSINESS_THEME.primary,
+            itemColor: BUSINESS_THEME.siderText,
+            subMenuItemBg: BUSINESS_THEME.siderBg,
+          },
+          Card: {
+            borderRadiusLG: 12,
+          },
+          Button: {
+            borderRadius: 8,
+          },
+          Table: {
+            headerBg: '#EFF7F4',
+            borderRadius: 8,
+          },
+        },
+      }}
+    >
       <AuthProvider>
         <Router>
           <Routes>

@@ -9,8 +9,8 @@ import {
   DeleteOutlined, CheckCircleOutlined, CloseCircleOutlined,
   MessageOutlined, UserOutlined, ClockCircleOutlined
 } from '@ant-design/icons';
-
-const { Title, Text } = Typography;
+import BusinessPageHeader from '../../components/BusinessPageHeader';
+import { BUSINESS_THEME } from '../../config/brand';
 
 // 模拟多账号数据
 const mockAccounts = [
@@ -227,7 +227,7 @@ const WechatPage: React.FC = () => {
       key: 'title',
       render: (text: string, record: any) => (
         <Space>
-          <PlayCircleOutlined style={{ color: record.status === 'live' ? '#52c41a' : '#999' }} />
+          <PlayCircleOutlined style={{ color: record.status === 'live' ? '#12A086' : BUSINESS_THEME.textSecondary }} />
           <span>{text}</span>
         </Space>
       ),
@@ -314,36 +314,26 @@ const WechatPage: React.FC = () => {
   ];
 
   return (
-    <div style={{ padding: '24px' }}>
-      {/* 页面标题和操作 */}
-      <div style={{ marginBottom: '24px' }}>
-        <Row justify="space-between" align="middle">
-          <Col>
-            <Title level={4} style={{ margin: 0 }}>
-              <Space>
-                <GlobalOutlined />
-                微信视频号渠道管理
-                <Badge count={accounts.length} style={{ backgroundColor: '#52c41a' }} />
-              </Space>
-            </Title>
-            <Text type="secondary">管理视频号企业号接入配置和直播互动</Text>
-          </Col>
-          <Col>
-            <Space>
-              <Button icon={<ReloadOutlined />} onClick={loadChannelData}>
-                刷新
-              </Button>
-              <Button 
-                type="primary" 
-                icon={<PlusOutlined />}
-                onClick={() => setIsAddModalVisible(true)}
-              >
-                添加账号
-              </Button>
-            </Space>
-          </Col>
-        </Row>
-      </div>
+    <div style={{ padding: '4px 0' }}>
+      <BusinessPageHeader
+        icon={<GlobalOutlined />}
+        title="视频号渠道"
+        subtitle="星链云客系统 · 视频号账号绑定与直播监听管理"
+        extra={
+          <Space>
+            <Button icon={<ReloadOutlined />} onClick={loadChannelData}>
+              刷新
+            </Button>
+            <Button
+              type="primary"
+              icon={<PlusOutlined />}
+              onClick={() => setIsAddModalVisible(true)}
+            >
+              添加账号
+            </Button>
+          </Space>
+        }
+      />
 
       {/* 账号列表 */}
       <Card title="账号管理" style={{ marginBottom: '24px' }}>
@@ -354,7 +344,7 @@ const WechatPage: React.FC = () => {
                 size="small"
                 hoverable
                 style={{ 
-                  border: selectedAccount === account.id ? '2px solid #1890ff' : '1px solid #d9d9d9',
+                  border: selectedAccount === account.id ? `2px solid ${BUSINESS_THEME.primary}` : `1px solid ${BUSINESS_THEME.border}`,
                   cursor: 'pointer'
                 }}
                 onClick={() => setSelectedAccount(account.id)}
@@ -450,11 +440,11 @@ const WechatPage: React.FC = () => {
                   value={currentAccount.status === 'connected' ? '已连接' : '未连接'}
                   prefix={
                     currentAccount.status === 'connected' ? 
-                    <CheckCircleOutlined style={{ color: '#52c41a' }} /> : 
-                    <CloseCircleOutlined style={{ color: '#ff4d4f' }} />
+                    <CheckCircleOutlined style={{ color: '#12A086' }} /> : 
+                    <CloseCircleOutlined style={{ color: '#E5484D' }} />
                   }
                   valueStyle={{ 
-                    color: currentAccount.status === 'connected' ? '#52c41a' : '#ff4d4f' 
+                    color: currentAccount.status === 'connected' ? '#12A086' : '#E5484D' 
                   }}
                 />
               </Col>
@@ -463,7 +453,7 @@ const WechatPage: React.FC = () => {
                   title="在线用户"
                   value={currentAccount.onlineUsers}
                   prefix={<UserOutlined />}
-                  valueStyle={{ color: '#1890ff' }}
+                  valueStyle={{ color: BUSINESS_THEME.primary }}
                 />
               </Col>
               <Col xs={24} sm={8}>
@@ -471,7 +461,7 @@ const WechatPage: React.FC = () => {
                   title="今日消息"
                   value={currentAccount.messagesToday}
                   prefix={<MessageOutlined />}
-                  valueStyle={{ color: '#722ed1' }}
+                  valueStyle={{ color: BUSINESS_THEME.primary }}
                 />
               </Col>
             </Row>
@@ -480,6 +470,7 @@ const WechatPage: React.FC = () => {
           {/* 直播管理 */}
           <Card title="直播管理" style={{ marginBottom: '24px' }}>
             <Table
+              scroll={{ x: 'max-content' }}
               columns={liveStreamColumns}
               dataSource={liveStreams}
               rowKey="id"
@@ -491,6 +482,7 @@ const WechatPage: React.FC = () => {
           {/* 消息管理 */}
           <Card title="消息管理">
             <Table
+              scroll={{ x: 'max-content' }}
               columns={messageColumns}
               dataSource={messages}
               rowKey="id"

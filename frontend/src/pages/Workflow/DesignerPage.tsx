@@ -1,22 +1,24 @@
 import React from 'react';
-import { Card, Row, Col, Button, Space } from 'antd';
+import { Card, Button, Space } from 'antd';
 import { ForkOutlined, PlusOutlined, SettingOutlined } from '@ant-design/icons';
+import BusinessEmptyState from '../../components/BusinessEmptyState';
+import { BUSINESS_THEME } from '../../config/brand';
 
 const DesignerPage: React.FC = () => {
   return (
-    <div style={{ padding: '24px' }}>
-      <div style={{ marginBottom: '24px' }}>
-        <h1 style={{ margin: 0, fontSize: '24px', fontWeight: 'bold' }}>
-          <ForkOutlined style={{ marginRight: '8px', color: '#1890ff' }} />
-          画布设计
+    <div style={{ padding: '4px 0' }}>
+      <div style={{ marginBottom: '20px' }}>
+        <h1 style={{ margin: 0, fontSize: '22px', fontWeight: 600, color: BUSINESS_THEME.textPrimary }}>
+          <ForkOutlined style={{ marginRight: '8px', color: BUSINESS_THEME.primary }} />
+          流程设计
         </h1>
-        <p style={{ margin: '8px 0 0 0', color: '#666' }}>
+        <p style={{ margin: '8px 0 0 0', color: BUSINESS_THEME.textSecondary, fontSize: 13 }}>
           可视化流程设计工具
         </p>
       </div>
 
-      <Card 
-        title="流程画布" 
+      <Card
+        title="流程画布"
         extra={
           <Space>
             <Button icon={<SettingOutlined />}>设置</Button>
@@ -24,10 +26,11 @@ const DesignerPage: React.FC = () => {
           </Space>
         }
       >
-        <div style={{ textAlign: 'center', padding: '60px 0', color: '#999' }}>
-          <ForkOutlined style={{ fontSize: '48px', marginBottom: '16px' }} />
-          <p>流程画布设计功能正在开发中</p>
-        </div>
+        <BusinessEmptyState
+          icon={<ForkOutlined />}
+          title="流程画布 · 规划中"
+          description="拖拽编排获客转化流程，所见即所得。当前为企业版规划模块，开通后支持 BPMN 导入导出。"
+        />
       </Card>
     </div>
   );

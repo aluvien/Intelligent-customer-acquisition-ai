@@ -1,4 +1,4 @@
-// LinkBot-AI 后端类型定义
+// 星链云客系统 后端类型定义
 
 export interface ApiResponse<T = any> {
   success: boolean;

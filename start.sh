@@ -5,6 +5,8 @@
 
 set -e
 
+ROOT="$(cd "$(dirname "$0")" && pwd)"
+
 echo "🚀 LinkBot-AI 服务启动中..."
 
 # 颜色定义
@@ -44,21 +46,31 @@ check_dependencies() {
 
 # 加载环境变量
 load_env() {
-    if [ -f .env ]; then
-        export $(cat .env | grep -v '^#' | xargs)
+    if [ -f "$ROOT/.env" ]; then
+        set -a
+        # shellcheck disable=SC1091
+        . "$ROOT/.env"
+        set +a
         echo -e "${GREEN}✅ 已加载环境变量${NC}"
     else
         echo -e "${YELLOW}⚠️  未找到 .env 文件${NC}"
     fi
 }
 
-# 启动 Go 服务
+# 启动 Go 服务（无 Go 工具链时用预编译二进制）
 start_go_service() {
     echo "🔧 启动 Go 代理服务 (端口 8080)..."
     check_port 8080
-    
-    cd "$(dirname "$0")"
-    nohup go run main.go > logs/go-service.log 2>&1 &
+
+    cd "$ROOT"
+    if command -v go &> /dev/null; then
+        nohup go run main.go > logs/go-service.log 2>&1 &
+    elif [ -x "$ROOT/live-im-proxy" ]; then
+        PORT=8080 nohup "$ROOT/live-im-proxy" > logs/go-service.log 2>&1 &
+    else
+        echo -e "${RED}❌ 未安装 Go 且找不到 live-im-proxy 二进制${NC}"
+        exit 1
+    fi
     GO_PID=$!
     echo $GO_PID > .go-service.pid
     
@@ -76,7 +88,7 @@ start_backend() {
     echo "🔧 启动后端 API 服务 (端口 3001)..."
     check_port 3001
     
-    cd "$(dirname "$0")/backend"
+    cd "$ROOT/backend"
     
     # 检查依赖
     if [ ! -d "node_modules" ]; then
@@ -104,7 +116,7 @@ start_frontend() {
     echo "🎨 启动前端服务 (端口 3000)..."
     check_port 3000
     
-    cd "$(dirname "$0")/../linkbot-ai-frontend"
+    cd "$ROOT/frontend"
     
     # 检查依赖
     if [ ! -d "node_modules" ]; then
@@ -112,9 +124,9 @@ start_frontend() {
         npm install
     fi
     
-    nohup npm start > ../linkbot-ai/logs/frontend.log 2>&1 &
+    nohup npm start > "$ROOT/logs/frontend.log" 2>&1 &
     FRONTEND_PID=$!
-    echo $FRONTEND_PID > ../linkbot-ai/.frontend.pid
+    echo $FRONTEND_PID > "$ROOT/.frontend.pid"
     
     sleep 5
     if ps -p $FRONTEND_PID > /dev/null; then
@@ -124,7 +136,7 @@ start_frontend() {
         exit 1
     fi
     
-    cd ../linkbot-ai
+    cd "$ROOT"
 }
 
 # 创建日志目录

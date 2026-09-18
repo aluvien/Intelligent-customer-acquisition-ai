@@ -2,9 +2,9 @@ import axios, { AxiosInstance, AxiosResponse } from 'axios';
 import { message } from 'antd';
 import { ApiResponse } from '../types';
 
-// 开发环境走 CRA 代理 → 后端路由为 /auth/...
-// 生产环境走 nginx 反代 → 统一以 /api 作为前缀
-const API_PREFIX = process.env.NODE_ENV === 'development' ? '' : '/api';
+// 前后端路径统一以 /api 为前缀（后端挂载在 app.use('/api', ...)）
+// 开发环境经 CRA proxy 转发到 http://localhost:3001，/api/* 同样会被转发
+const API_PREFIX = '/api';
 
 const api: AxiosInstance = axios.create({
   baseURL: API_PREFIX,
@@ -42,12 +42,20 @@ api.interceptors.response.use(
   (error) => {
     if (error.response) {
       const { status, data } = error.response as any;
+      // 登录/注册接口的 401 是业务失败（密码错），交给调用方处理，不全局跳转
+      const reqUrl: string = (error.config as any)?.url || '';
+      const isAuthPage = reqUrl.includes('/auth/login') || reqUrl.includes('/auth/register');
       switch (status) {
         case 401:
+          if (isAuthPage) {
+            break;
+          }
           message.error('登录已过期，请重新登录');
           localStorage.removeItem('token');
           localStorage.removeItem('user');
-          window.location.href = '/login';
+          if (window.location.pathname !== '/login') {
+            window.location.href = '/login';
+          }
           break;
         case 403:
           message.error('权限不足');

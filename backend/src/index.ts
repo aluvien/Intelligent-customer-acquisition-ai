@@ -12,6 +12,16 @@ dotenv.config();
 const app = express();
 const PORT = process.env.API_PORT || 3001;
 
+// 启动前密钥检查：生产缺 JWT_SECRET 直接退出，开发警告
+if (!process.env.JWT_SECRET) {
+  if (process.env.NODE_ENV === 'production') {
+    console.error('❌ FATAL: JWT_SECRET 未设置，拒绝启动');
+    process.exit(1);
+  } else {
+    console.warn('⚠️  JWT_SECRET 未设置，开发环境使用默认密钥，切勿用于生产');
+  }
+}
+
 // 安全中间件
 app.use(helmet());
 
@@ -50,7 +60,20 @@ const limiter = rateLimit({
   },
   skip: (req) => {
     // 跳过登录和注册接口，它们使用专门的限流
-    return req.path === '/auth/login' || req.path === '/auth/register';
+    // 注意用 originalUrl：挂载到 /api 下后 req.path 会被剥离前缀
+    return req.originalUrl === '/api/auth/login' || req.originalUrl === '/api/auth/register';
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// 敏感接口（改密/刷新/token校验）独立严格限流
+const sensitiveLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 分钟
+  max: 30,
+  message: {
+    success: false,
+    message: '操作过于频繁，请稍后再试',
   },
   standardHeaders: true,
   legacyHeaders: false,
@@ -59,6 +82,11 @@ const limiter = rateLimit({
 // 登录和注册接口使用更宽松的限流（在路由之前应用）
 app.use('/api/auth/login', loginLimiter);
 app.use('/api/auth/register', loginLimiter);
+
+// 敏感接口独立限流
+app.use('/api/auth/password', sensitiveLimiter);
+app.use('/api/auth/refresh', sensitiveLimiter);
+app.use('/api/auth/me', sensitiveLimiter);
 
 // 其他API使用通用限流
 app.use('/api', limiter);
@@ -71,7 +99,7 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.get('/health', (req, res) => {
   res.json({
     success: true,
-    message: 'LinkBot-AI API 服务运行正常',
+    message: '星链云客系统 API 服务运行正常',
     timestamp: new Date().toISOString(),
     version: '1.0.0',
   });
@@ -81,7 +109,7 @@ app.get('/health', (req, res) => {
 app.get('/api', (req, res) => {
   res.json({
     success: true,
-    message: 'LinkBot-AI API 服务',
+    message: '星链云客系统 API 服务',
     version: '1.0.0',
     endpoints: {
       auth: '/api/auth',
@@ -95,7 +123,21 @@ app.get('/api', (req, res) => {
   });
 });
 
-// 简化路由（临时使用）
+// 鉴权保护的业务路由（必须在 simple 挂载之前注册，否则中间件不执行）
+const { requireAuth } = require('./middleware/auth');
+app.use('/api/analytics', requireAuth);
+app.use('/api/channels', requireAuth);
+app.use('/api/conversations', requireAuth);
+app.use('/api/leads', requireAuth);
+app.use('/api/ai', requireAuth);
+
+// 真实鉴权路由（bcrypt + JWT，见 routes/auth.ts）
+app.use('/api/auth', require('./routes/auth'));
+
+// 实时网关：先鉴权换一次性 ticket，再连 WS（见 routes/realtime + realtime/hub）
+app.use('/api/ws', requireAuth, require('./routes/realtime'));
+
+// 简化业务路由（mock 数据 + 抖音转发，登录逻辑已迁移到 routes/auth）
 app.use('/api', require('./routes/simple'));
 
 // 完整路由（暂时注释，等修复错误后再启用）
@@ -127,13 +169,17 @@ app.use((err: any, req: express.Request, res: express.Response, next: express.Ne
   });
 });
 
-// 启动服务器
-app.listen(PORT, () => {
-  console.log('🚀 LinkBot-AI 后端服务启动成功！');
+// 启动服务器（保留 server 句柄，供 WS 网关复用同一端口）
+const server = app.listen(PORT, () => {
+  console.log('🚀 星链云客系统 后端服务启动成功！');
   console.log(`📡 服务地址: http://localhost:${PORT}`);
   console.log(`📊 健康检查: http://localhost:${PORT}/health`);
   console.log(`📚 API文档: http://localhost:${PORT}/api`);
-  console.log(`👨‍💻 作者: 赵国第一科技官`);
+  console.log(`🔌 WS 网关: ws://localhost:${PORT}/ws (需先 GET /api/ws/ticket)`);
+  console.log(`🏢 星链云客系统 · 企业版`);
 });
+
+// WS 实时网关挂载到同一端口
+require('./realtime/hub').attach(server);
 
 export default app;

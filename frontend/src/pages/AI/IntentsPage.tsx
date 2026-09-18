@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import api from '../../services/api';
 import {
   Card,
   Row,
@@ -46,6 +47,9 @@ import {
   ImportOutlined,
   SearchOutlined,
 } from '@ant-design/icons';
+
+import BusinessPageHeader from '../../components/BusinessPageHeader';
+import { BUSINESS_THEME } from '../../config/brand';
 
 const { TextArea } = Input;
 const { Option } = Select;
@@ -184,9 +188,8 @@ const IntentsPage: React.FC = () => {
   const loadIntents = async () => {
     setLoading(true);
     try {
-      // 调用真实API
-      const response = await fetch('/api/ai/intents/data');
-      const result = await response.json();
+      // 调用真实API（经统一 api 实例，自动携带 token/租户头）
+      const result = await api.get('/ai/intents/data').then(res => res.data);
       
       if (result.success) {
         // 转换API数据格式
@@ -331,9 +334,10 @@ const IntentsPage: React.FC = () => {
       title: '意图名称',
       dataIndex: 'name',
       key: 'name',
+        width: 140,
       render: (text: string, record: any) => (
         <Space>
-          <RobotOutlined style={{ color: '#1890ff' }} />
+          <RobotOutlined style={{ color: BUSINESS_THEME.primary }} />
           <span style={{ fontWeight: 'bold' }}>{text}</span>
           <Tag color={getPriorityColor(record.priority)}>
             {getPriorityText(record.priority)}
@@ -345,12 +349,14 @@ const IntentsPage: React.FC = () => {
       title: '描述',
       dataIndex: 'description',
       key: 'description',
+        width: 140,
       ellipsis: true,
     },
     {
       title: '状态',
       dataIndex: 'status',
       key: 'status',
+        width: 85,
       render: (status: string) => (
         <Badge 
           status={getStatusColor(status)} 
@@ -362,13 +368,14 @@ const IntentsPage: React.FC = () => {
       title: '置信度',
       dataIndex: 'confidence',
       key: 'confidence',
+        width: 120,
       render: (confidence: number) => (
         <div>
           <Progress 
             percent={Math.round(confidence * 100)} 
             size="small" 
             showInfo={false}
-            strokeColor={confidence > 0.9 ? '#52c41a' : confidence > 0.7 ? '#fa8c16' : '#ff4d4f'}
+            strokeColor={confidence > 0.9 ? '#12A086' : confidence > 0.7 ? '#D97706' : '#E5484D'}
           />
           <Text style={{ fontSize: '12px' }}>
             {Math.round(confidence * 100)}%
@@ -380,13 +387,14 @@ const IntentsPage: React.FC = () => {
       title: '准确率',
       dataIndex: 'accuracy',
       key: 'accuracy',
+        width: 120,
       render: (accuracy: number) => (
         <div>
           <Progress 
             percent={Math.round(accuracy * 100)} 
             size="small" 
             showInfo={false}
-            strokeColor={accuracy > 0.9 ? '#52c41a' : accuracy > 0.7 ? '#fa8c16' : '#ff4d4f'}
+            strokeColor={accuracy > 0.9 ? '#12A086' : accuracy > 0.7 ? '#D97706' : '#E5484D'}
           />
           <Text style={{ fontSize: '12px' }}>
             {Math.round(accuracy * 100)}%
@@ -398,6 +406,7 @@ const IntentsPage: React.FC = () => {
       title: '训练次数',
       dataIndex: 'trainingCount',
       key: 'trainingCount',
+        width: 90,
       render: (count: number) => (
         <Space>
           <ThunderboltOutlined />
@@ -409,11 +418,14 @@ const IntentsPage: React.FC = () => {
       title: 'AI模型',
       dataIndex: 'aiModel',
       key: 'aiModel',
+        width: 85,
       render: (model: string) => <Tag color="blue">{model}</Tag>,
     },
     {
       title: '操作',
       key: 'action',
+        width: 185,
+        fixed: 'right' as const,
       render: (record: any) => (
         <Space>
           <Button 
@@ -483,7 +495,7 @@ const IntentsPage: React.FC = () => {
           percent={Math.round(confidence * 100)} 
           size="small" 
           showInfo={false}
-          strokeColor={confidence > 0.8 ? '#52c41a' : '#fa8c16'}
+          strokeColor={confidence > 0.8 ? '#12A086' : '#D97706'}
         />
       ),
     },
@@ -502,41 +514,33 @@ const IntentsPage: React.FC = () => {
   });
 
   return (
-    <div style={{ padding: '24px' }}>
+    <div style={{ padding: '4px 0' }}>
       {/* 页面标题和操作 */}
-      <div style={{ marginBottom: '24px' }}>
-        <Row justify="space-between" align="middle">
-          <Col>
-            <h1 style={{ margin: 0, fontSize: '24px', fontWeight: 'bold' }}>
-              <RobotOutlined style={{ marginRight: '8px', color: '#1890ff' }} />
-              意图管理
-            </h1>
-            <p style={{ margin: '8px 0 0 0', color: '#666' }}>
-              管理AI机器人的意图识别和智能回复配置
-            </p>
-          </Col>
-          <Col>
-            <Space>
-              <Button icon={<ReloadOutlined />} onClick={loadIntents}>
-                刷新
-              </Button>
-              <Button icon={<ImportOutlined />}>导入</Button>
-              <Button icon={<ExportOutlined />}>导出</Button>
-              <Button 
-                type="primary" 
-                icon={<PlusOutlined />}
-                onClick={() => {
-                  setSelectedIntent(null);
-                  intentForm.resetFields();
-                  setIntentModalVisible(true);
-                }}
-              >
-                新建意图
-              </Button>
-            </Space>
-          </Col>
-        </Row>
-      </div>
+      <BusinessPageHeader
+        icon={<RobotOutlined />}
+        title="意图管理"
+        subtitle="星链云客系统 · 管理AI机器人的意图识别和智能回复配置"
+        extra={
+          <Space>
+            <Button icon={<ReloadOutlined />} onClick={loadIntents}>
+              刷新
+            </Button>
+            <Button icon={<ImportOutlined />}>导入</Button>
+            <Button icon={<ExportOutlined />}>导出</Button>
+            <Button
+              type="primary"
+              icon={<PlusOutlined />}
+              onClick={() => {
+                setSelectedIntent(null);
+                intentForm.resetFields();
+                setIntentModalVisible(true);
+              }}
+            >
+              新建意图
+            </Button>
+          </Space>
+        }
+      />
 
       {/* 统计卡片 */}
       <Row gutter={[16, 16]} style={{ marginBottom: '24px' }}>
@@ -546,7 +550,7 @@ const IntentsPage: React.FC = () => {
               title="总意图数"
               value={intents.length}
               prefix={<RobotOutlined />}
-              valueStyle={{ color: '#1890ff' }}
+              valueStyle={{ color: BUSINESS_THEME.primary }}
             />
           </Card>
         </Col>
@@ -556,7 +560,7 @@ const IntentsPage: React.FC = () => {
               title="启用意图"
               value={intents.filter(i => i.status === 'active').length}
               prefix={<CheckCircleOutlined />}
-              valueStyle={{ color: '#52c41a' }}
+              valueStyle={{ color: '#12A086' }}
             />
           </Card>
         </Col>
@@ -567,7 +571,7 @@ const IntentsPage: React.FC = () => {
               value={Math.round(intents.reduce((acc, intent) => acc + intent.accuracy, 0) / intents.length * 100)}
               suffix="%"
               prefix={<ThunderboltOutlined />}
-              valueStyle={{ color: '#722ed1' }}
+              valueStyle={{ color: BUSINESS_THEME.primary }}
             />
           </Card>
         </Col>
@@ -577,7 +581,7 @@ const IntentsPage: React.FC = () => {
               title="总训练次数"
               value={intents.reduce((acc, intent) => acc + intent.trainingCount, 0)}
               prefix={<ThunderboltOutlined />}
-              valueStyle={{ color: '#fa8c16' }}
+              valueStyle={{ color: '#D97706' }}
             />
           </Card>
         </Col>
@@ -619,6 +623,8 @@ const IntentsPage: React.FC = () => {
       {/* 意图列表 */}
       <Card title="意图列表">
         <Table
+          scroll={{ x: 'max-content' }}
+          size="middle"
           columns={intentColumns}
           dataSource={filteredIntents}
           rowKey="id"
@@ -626,7 +632,7 @@ const IntentsPage: React.FC = () => {
           pagination={{ pageSize: 10 }}
           expandable={{
             expandedRowRender: (record) => (
-              <div style={{ padding: '16px', backgroundColor: '#fafafa' }}>
+              <div style={{ padding: '16px', backgroundColor: BUSINESS_THEME.contentBg }}>
                 <Row gutter={[16, 16]}>
                   <Col span={12}>
                     <div>
@@ -673,6 +679,7 @@ const IntentsPage: React.FC = () => {
       {/* 训练数据 */}
       <Card title="训练数据" style={{ marginTop: '24px' }}>
         <Table
+          scroll={{ x: 'max-content' }}
           columns={trainingColumns}
           dataSource={trainingData}
           rowKey="id"

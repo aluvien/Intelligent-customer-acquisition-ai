@@ -46,9 +46,9 @@ func main() {
 		RedirectURI: getEnv("REDIRECT_URI", "http://localhost:8080/oauth/callback"),
 	}
 
-	log.Printf("🚀 LinkBot-AI 渠道代理服务启动中...")
-	log.Printf("📡 端口: %s", config.Port)
-	log.Printf("🎯 支持渠道: %v", config.Channels)
+	log.Printf("星链云客系统 · 渠道代理服务启动中...")
+	log.Printf("服务端口: %s", config.Port)
+	log.Printf("支持渠道: %v", config.Channels)
 	log.Printf("🔑 DouyinAppID: %s", config.DouyinAppID)
 	log.Printf("🔑 DouyinAppSecret: %s", maskSecret(config.DouyinAppSecret))
 	log.Printf("🔗 RedirectURI: %s", config.RedirectURI)
@@ -91,31 +91,31 @@ func main() {
 <!DOCTYPE html>
 <html>
 <head>
-    <title>LinkBot-AI 全域获客智能客服系统</title>
+    <title>星链云客系统 企业级全渠道智能客服平台</title>
     <meta charset="utf-8">
     <style>
-        body { font-family: Arial, sans-serif; margin: 40px; background: #f5f5f5; }
+        body { font-family: -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif; margin: 0; background: #F2F4F7; color: #1A2332; }
         .container { max-width: 800px; margin: 0 auto; background: white; padding: 30px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
         h1 { color: #1890ff; text-align: center; }
         .status { background: #f6ffed; border: 1px solid #b7eb8f; padding: 15px; border-radius: 5px; margin: 20px 0; }
         .endpoints { background: #f0f9ff; border: 1px solid #91d5ff; padding: 15px; border-radius: 5px; margin: 20px 0; }
         .endpoint { margin: 10px 0; }
-        .method { background: #52c41a; color: white; padding: 2px 8px; border-radius: 3px; font-size: 12px; }
+        .method { background: #1E3A5F; color: white; padding: 2px 8px; border-radius: 3px; font-size: 12px; }
         .url { font-family: monospace; background: #f0f0f0; padding: 2px 5px; border-radius: 3px; }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>🚀 LinkBot-AI 全域获客智能客服系统</h1>
+        <div style="background:#0F2342;color:#fff;padding:20px 0;margin:-8px -8px 0 -8px;"><div style="max-width:800px;margin:0 auto;padding:0 30px;"><div style="font-size:11px;letter-spacing:4px;color:rgba(255,255,255,0.55);">STARLINK CLOUD</div><div style="font-size:24px;font-weight:700;letter-spacing:2px;margin-top:4px;">星链云客系统</div><div style="font-size:13px;color:rgba(255,255,255,0.7);margin-top:4px;">企业级全渠道智能客服平台 · 企业版</div></div></div>
         
         <div class="status">
-            <h3>✅ 服务状态</h3>
+            <h3>服务状态 · 运行正常</h3>
             <p>服务运行正常，端口: ` + config.Port + `</p>
             <p>支持渠道: ` + fmt.Sprintf("%v", config.Channels) + `</p>
         </div>
         
         <div class="endpoints">
-            <h3>🔗 API 端点</h3>
+            <h3>服务接口</h3>
             <div class="endpoint">
                 <span class="method">GET</span> <span class="url">/health</span> - 健康检查
             </div>
@@ -134,7 +134,7 @@ func main() {
         </div>
         
         <div style="text-align: center; margin-top: 30px;">
-            <p>🎯 <strong>英明神武、绝世无双、寿与天齐的主公</strong> 的智能客服系统</p>
+            <p>© 2026 星链云客系统 · 企业版</p>
             <p>部署时间: ` + time.Now().Format("2006-01-02 15:04:05") + `</p>
         </div>
     </div>

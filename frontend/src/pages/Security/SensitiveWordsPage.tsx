@@ -1,22 +1,24 @@
 import React from 'react';
-import { Card, Row, Col, Button, Space } from 'antd';
-import { SafetyOutlined, PlusOutlined, SettingOutlined } from '@ant-design/icons';
+import { Card, Button, Space } from 'antd';
+import { PlusOutlined, SafetyOutlined, SettingOutlined } from '@ant-design/icons';
+import BusinessEmptyState from '../../components/BusinessEmptyState';
+import { BUSINESS_THEME } from '../../config/brand';
 
 const SensitiveWordsPage: React.FC = () => {
   return (
-    <div style={{ padding: '24px' }}>
-      <div style={{ marginBottom: '24px' }}>
-        <h1 style={{ margin: 0, fontSize: '24px', fontWeight: 'bold' }}>
-          <SafetyOutlined style={{ marginRight: '8px', color: '#1890ff' }} />
+    <div style={{ padding: '4px 0' }}>
+      <div style={{ marginBottom: '20px' }}>
+        <h1 style={{ margin: 0, fontSize: '22px', fontWeight: 600, color: BUSINESS_THEME.textPrimary }}>
+          <SafetyOutlined style={{ marginRight: '8px', color: BUSINESS_THEME.primary }} />
           敏感词库
         </h1>
-        <p style={{ margin: '8px 0 0 0', color: '#666' }}>
-          管理敏感词库和内容审核规则
+        <p style={{ margin: '8px 0 0 0', color: BUSINESS_THEME.textSecondary, fontSize: 13 }}>
+          管理敏感词库与内容审核规则
         </p>
       </div>
 
-      <Card 
-        title="敏感词管理" 
+      <Card
+        title="敏感词管理"
         extra={
           <Space>
             <Button icon={<SettingOutlined />}>设置</Button>
@@ -24,10 +26,11 @@ const SensitiveWordsPage: React.FC = () => {
           </Space>
         }
       >
-        <div style={{ textAlign: 'center', padding: '60px 0', color: '#999' }}>
-          <SafetyOutlined style={{ fontSize: '48px', marginBottom: '16px' }} />
-          <p>敏感词库管理功能正在开发中</p>
-        </div>
+        <BusinessEmptyState
+          icon={<SafetyOutlined />}
+          title="敏感词库 · 规划中"
+          description="三级分类管理敏感词，支撑发送前拦截。当前为企业版规划模块，开通后支持批量导入与命中测试。"
+        />
       </Card>
     </div>
   );

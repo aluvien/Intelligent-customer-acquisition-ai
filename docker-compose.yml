@@ -1,19 +1,16 @@
-version: '3.8'
-
 services:
   # PostgreSQL 数据库
   postgres:
     image: postgres:15-alpine
     container_name: linkbot-postgres
     environment:
-      POSTGRES_DB: linkbot_ai
-      POSTGRES_USER: linkbot
-      POSTGRES_PASSWORD: linkbot123
+      POSTGRES_DB: ${DB_NAME:-linkbot_ai}
+      POSTGRES_USER: ${DB_USER:-linkbot}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?请在 .env 中设置 DB_PASSWORD}
     ports:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./deploy/init.sql:/docker-entrypoint-initdb.d/init.sql
     networks:
       - linkbot-network
 
@@ -36,13 +33,13 @@ services:
       DB_DIALECT: postgres
       DB_HOST: postgres
       DB_PORT: 5432
-      DB_DATABASE: linkbot_ai
-      DB_USER: linkbot
-      DB_PASSWORD: linkbot123
+      DB_DATABASE: ${DB_NAME:-linkbot_ai}
+      DB_USER: ${DB_USER:-linkbot}
+      DB_PASSWORD: ${DB_PASSWORD:?请在 .env 中设置 DB_PASSWORD}
       REDIS_HOST: redis
       REDIS_PORT: 6379
       APP_ENV: production
-      APP_KEY: linkbot-ai-secret-key-2024
+      APP_KEY: ${APP_KEY:?请在 .env 中设置 APP_KEY}
     ports:
       - "13000:3000"
     depends_on:
@@ -62,12 +59,12 @@ services:
       PORT: 3001
       DB_HOST: postgres
       DB_PORT: 5432
-      DB_NAME: linkbot_ai
-      DB_USER: linkbot
-      DB_PASSWORD: linkbot123
+      DB_NAME: ${DB_NAME:-linkbot_ai}
+      DB_USER: ${DB_USER:-linkbot}
+      DB_PASSWORD: ${DB_PASSWORD:?请在 .env 中设置 DB_PASSWORD}
       REDIS_HOST: redis
       REDIS_PORT: 6379
-      JWT_SECRET: linkbot-jwt-secret-2024
+      JWT_SECRET: ${JWT_SECRET:?请在 .env 中设置 JWT_SECRET}
     ports:
       - "3001:3001"
     volumes:
@@ -98,10 +95,10 @@ services:
     networks:
       - linkbot-network
 
-  # Go 代理服务
+  # Go 代理服务（代码在仓库根目录，见根 Dockerfile / go.mod）
   proxy:
     build:
-      context: ./proxy
+      context: .
       dockerfile: Dockerfile
     container_name: linkbot-proxy
     environment:
@@ -109,17 +106,15 @@ services:
       REDIS_HOST: redis
       REDIS_PORT: 6379
       API_URL: http://backend:3001/api
-      DOUYIN_APP_ID: aw6hj204nms0vumu
-      DOUYIN_APP_SECRET: b46cd587e094aae751e45380f9c0e72d
+      DOUYIN_APP_ID: ${DOUYIN_APP_ID:-}
+      DOUYIN_APP_SECRET: ${DOUYIN_APP_SECRET:-}
       REDIRECT_URI: http://localhost:8080/oauth/callback
       COZE_API: https://api.coze.com/open/v1
-      COZE_TOKEN: 
-      NB_API: 
-      NB_TOKEN: 
+      COZE_TOKEN: ${COZE_TOKEN:-}
+      NB_API: ${NB_API:-}
+      NB_TOKEN: ${NB_TOKEN:-}
     ports:
       - "8080:8080"
-    volumes:
-      - ./proxy:/app
     depends_on:
       - redis
       - backend
@@ -134,8 +129,7 @@ services:
       - "80:80"
       - "443:443"
     volumes:
-      - ./deploy/nginx.conf:/etc/nginx/nginx.conf
-      - ./deploy/ssl:/etc/nginx/ssl
+      - ./frontend/nginx.conf:/etc/nginx/conf.d/default.conf
     depends_on:
       - frontend
       - backend

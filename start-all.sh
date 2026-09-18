@@ -6,6 +6,8 @@
 echo "🚀 LinkBot-AI 一键启动脚本"
 echo "=========================="
 
+ROOT="$(cd "$(dirname "$0")" && pwd)"
+
 # 检查Node.js是否安装
 if ! command -v node &> /dev/null; then
     echo "❌ Node.js 未安装，请先安装 Node.js"
@@ -15,7 +17,7 @@ fi
 # 检查端口占用
 check_port() {
     if lsof -ti:$1 > /dev/null 2>&1; then
-        echo "дела": "端口 $1 已被占用，尝试停止..."
+        echo "端口 $1 已被占用，尝试停止..."
         kill -9 $(lsof -ti:$1) 2>/dev/null
         sleep 2
     fi
@@ -31,7 +33,7 @@ sleep 1
 
 # 启动后端 (端口3001)
 echo "📡 启动后端服务 (3001)..."
-cd /Users/yiche/linkbot-ai/backend
+cd "$ROOT/backend"
 npm run dev > /tmp/backend.log 2>&1 &
 BACKEND_PID=$!
 echo "✅ 后端已启动 (PID: $BACKEND_PID)"
@@ -39,12 +41,23 @@ echo "✅ 后端已启动 (PID: $BACKEND_PID)"
 # 等待后端启动
 sleep 3
 
-# 启动Go代理 (端口8080)
+# 启动Go代理 (端口8080，Go 代码在仓库根目录)
 echo "🌐 启动Go代理服务 (8080)..."
-cd /Users/yiche/linkbot-ai/proxy
+cd "$ROOT"
 # 加载.env文件中的环境变量
-export $(cat .env | grep -v '^#' | xargs)
-./live-im-proxy > /tmp/proxy.log 2>&1 &
+if [ -f "$ROOT/.env" ]; then
+    set -a
+    # shellcheck disable=SC1091
+    . "$ROOT/.env"
+    set +a
+fi
+if [ -x "$ROOT/live-im-proxy" ]; then
+    PORT=8080 ./live-im-proxy > /tmp/proxy.log 2>&1 &
+elif command -v go &> /dev/null; then
+    PORT=8080 go run main.go > /tmp/proxy.log 2>&1 &
+else
+    echo "❌ 未安装 Go 且找不到 live-im-proxy 二进制，跳过代理启动"
+fi
 PROXY_PID=$!
 echo "✅ Go代理已启动 (PID: $PROXY_PID)"
 
@@ -53,7 +66,7 @@ sleep 2
 
 # 启动前端 (端口3000)
 echo "🎨 启动前端服务 (3000)..."
-cd /Users/yiche/linkbot-ai/frontend
+cd "$ROOT/frontend"
 npm start > /tmp/frontend.log 2>&1 &
 FRONTEND_PID=$!
 echo "✅ 前端已启动 (PID: $FRONTEND_PID)"

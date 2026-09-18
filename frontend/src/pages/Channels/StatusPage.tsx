@@ -1,6 +1,8 @@
 import React from 'react';
 import { Card, Row, Col, Statistic, Progress, Alert, List, Badge, Space } from 'antd';
 import { GlobalOutlined, CheckCircleOutlined, CloseCircleOutlined, WarningOutlined } from '@ant-design/icons';
+import BusinessPageHeader from '../../components/BusinessPageHeader';
+import { BUSINESS_THEME } from '../../config/brand';
 
 const StatusPage: React.FC = () => {
   const channelStatus = [
@@ -29,61 +31,57 @@ const StatusPage: React.FC = () => {
   };
 
   return (
-    <div style={{ padding: '24px' }}>
-      <div style={{ marginBottom: '24px' }}>
-        <h1 style={{ margin: 0, fontSize: '24px', fontWeight: 'bold' }}>
-          <GlobalOutlined style={{ marginRight: '8px', color: '#1890ff' }} />
-          渠道状态监控
-        </h1>
-        <p style={{ margin: '8px 0 0 0', color: '#666' }}>
-          监控所有渠道的连接状态和运行情况
-        </p>
-      </div>
+    <div style={{ padding: '4px 0' }}>
+      <BusinessPageHeader
+        icon={<GlobalOutlined />}
+        title="渠道状态监控"
+        subtitle="星链云客系统 · 监控所有渠道的连接状态和运行情况"
+      />
 
       <Row gutter={[16, 16]} style={{ marginBottom: '24px' }}>
         <Col xs={24} sm={8} lg={6}>
-          <Card>
+          <Card style={{ borderColor: BUSINESS_THEME.border }}>
             <Statistic
               title="正常渠道"
               value={channelStatus.filter(c => c.status === 'connected').length}
-              prefix={<CheckCircleOutlined style={{ color: '#52c41a' }} />}
-              valueStyle={{ color: '#52c41a' }}
+              prefix={<CheckCircleOutlined style={{ color: '#12A086' }} />}
+              valueStyle={{ color: '#12A086' }}
             />
           </Card>
         </Col>
         <Col xs={24} sm={8} lg={6}>
-          <Card>
+          <Card style={{ borderColor: BUSINESS_THEME.border }}>
             <Statistic
               title="异常渠道"
               value={channelStatus.filter(c => c.status === 'warning').length}
-              prefix={<WarningOutlined style={{ color: '#fa8c16' }} />}
-              valueStyle={{ color: '#fa8c16' }}
+              prefix={<WarningOutlined style={{ color: '#D97706' }} />}
+              valueStyle={{ color: '#D97706' }}
             />
           </Card>
         </Col>
         <Col xs={24} sm={8} lg={6}>
-          <Card>
+          <Card style={{ borderColor: BUSINESS_THEME.border }}>
             <Statistic
               title="断开渠道"
               value={channelStatus.filter(c => c.status === 'disconnected').length}
-              prefix={<CloseCircleOutlined style={{ color: '#ff4d4f' }} />}
-              valueStyle={{ color: '#ff4d4f' }}
+              prefix={<CloseCircleOutlined style={{ color: '#E5484D' }} />}
+              valueStyle={{ color: '#E5484D' }}
             />
           </Card>
         </Col>
         <Col xs={24} sm={8} lg={6}>
-          <Card>
+          <Card style={{ borderColor: BUSINESS_THEME.border }}>
             <Statistic
               title="总渠道数"
               value={channelStatus.length}
-              prefix={<GlobalOutlined />}
-              valueStyle={{ color: '#1890ff' }}
+              prefix={<GlobalOutlined style={{ color: BUSINESS_THEME.primary }} />}
+              valueStyle={{ color: BUSINESS_THEME.primary }}
             />
           </Card>
         </Col>
       </Row>
 
-      <Card title="渠道状态详情">
+      <Card style={{ borderColor: BUSINESS_THEME.border }} title="渠道状态详情">
         <List
           dataSource={channelStatus}
           renderItem={(item) => (
@@ -106,7 +104,7 @@ const StatusPage: React.FC = () => {
                       percent={parseFloat(item.uptime)} 
                       size="small" 
                       showInfo={false}
-                      strokeColor={item.status === 'connected' ? '#52c41a' : item.status === 'warning' ? '#fa8c16' : '#ff4d4f'}
+                      strokeColor={item.status === 'connected' ? '#12A086' : item.status === 'warning' ? '#D97706' : '#E5484D'}
                     />
                   </div>
                 }
