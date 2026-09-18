@@ -67,7 +67,9 @@ router.get('/sessions/:sessionId/messages', async (req, res, next) => {
         await client.query(`UPDATE messages SET delivery_status = 'delivered' WHERE tenant_id = $1 AND id = ANY($2::text[]) AND delivery_status = 'provider_accepted'`, [context.tenantId, providerAcceptedIds]);
       }
       const rows = result.rows.reverse().map((row) => providerAcceptedIds.includes(row.id) ? { ...row, deliveryStatus: 'delivered' } : row);
-      const oldest = result.rows[result.rows.length - 1];
+      // `rows` is now oldest-to-newest after reverse(), so the first item is
+      // the correct boundary for the next older page.
+      const oldest = result.rows[0];
       return { rows, hasMore: result.rowCount === 200, nextBefore: result.rowCount === 200 && oldest ? encodeMessageCursor(oldest.createdAt, oldest.id) : null };
     });
     res.json({ success: true, message: '获取消息成功', data: { messages: messages.rows, pagination: { hasMore: messages.hasMore, nextBefore: messages.nextBefore } } });
