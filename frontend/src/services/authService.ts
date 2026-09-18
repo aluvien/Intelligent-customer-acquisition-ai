@@ -56,6 +56,7 @@ export class AuthService {
 
   // 登出
   logout(): void {
+    void api.post('/auth/logout').catch(() => undefined);
     localStorage.removeItem('token');
     localStorage.removeItem('user');
     localStorage.removeItem('tenantId');

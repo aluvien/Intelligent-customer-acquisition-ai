@@ -1,230 +1,86 @@
 import express from 'express';
-import { ApiResponse, Channel } from '../types';
+import { query } from '../db';
+import { randomId } from '../config';
+import { AppError } from '../errors';
+import { requireRole } from '../middleware/auth';
+import { tenantId } from './helpers';
 
 const router = express.Router();
 
-// 模拟渠道数据
-const mockChannels: Channel[] = [
-  {
-    id: '1',
-    tenantId: 'tenant-1',
-    type: 'douyin',
-    name: '抖音直播间',
-    accountId: 'douyin_123456',
-    accountName: '我的抖音号',
-    avatar: 'https://example.com/avatar.jpg',
-    status: 'online',
-    lastHeartbeat: new Date(),
-    config: {
-      autoReply: true,
-      keywords: ['价格', '购买', '咨询'],
-      welcomeMessage: '欢迎来到直播间！有什么问题随时问我~',
-      silenceTimeout: 30,
-      maxConcurrent: 100,
-    },
-    createdAt: new Date(),
-  },
-];
+function mapChannel(row: Record<string, unknown>) {
+  return {
+    id: row.id,
+    type: row.platform,
+    name: row.display_name,
+    accountId: row.external_account_id,
+    accountName: row.display_name,
+    avatar: row.avatar || undefined,
+    status: row.status,
+    lastHeartbeat: row.last_event_at,
+    config: { autoReply: false, keywords: [], welcomeMessage: '', silenceTimeout: 0, maxConcurrent: 0 },
+    createdAt: row.created_at,
+    capability: row.platform === 'web' ? 'verified' : 'unverified',
+  };
+}
 
-// 获取渠道列表
-router.get('/', (req, res) => {
+router.get('/douyin/oauth/url', (_req, res) => res.status(503).json({ success: false, message: '抖音 OAuth 尚未完成当前应用的真实权限核验', code: 'PLATFORM_UNVERIFIED' }));
+router.get('/douyin/oauth/callback', (_req, res) => res.status(503).json({ success: false, message: '抖音 OAuth 回调暂未启用，避免未经验证的授权流程', code: 'PLATFORM_UNVERIFIED' }));
+router.post('/douyin/start', (_req, res) => res.status(503).json({ success: false, message: '抖音监听能力尚未完成真实核验', code: 'PLATFORM_UNVERIFIED' }));
+router.post('/douyin/stop', (_req, res) => res.status(503).json({ success: false, message: '抖音监听能力尚未完成真实核验', code: 'PLATFORM_UNVERIFIED' }));
+
+router.get('/', async (req, res, next) => {
   try {
-    const { page = 1, limit = 10, type, status } = req.query;
-    
-    let filteredChannels = mockChannels;
-    
-    if (type) {
-      filteredChannels = filteredChannels.filter(c => c.type === type);
-    }
-    
-    if (status) {
-      filteredChannels = filteredChannels.filter(c => c.status === status);
-    }
-    
-    const start = (Number(page) - 1) * Number(limit);
-    const end = start + Number(limit);
-    const paginatedChannels = filteredChannels.slice(start, end);
-    
-    return res.json({
-      success: true,
-      message: '获取渠道列表成功',
-      data: {
-        channels: paginatedChannels,
-        pagination: {
-          page: Number(page),
-          limit: Number(limit),
-          total: filteredChannels.length,
-          totalPages: Math.ceil(filteredChannels.length / Number(limit)),
-        },
-      },
-    } as ApiResponse);
-  } catch (error) {
-    console.error('获取渠道列表错误:', error);
-    return res.status(500).json({
-      success: false,
-      message: '服务器内部错误',
-    } as ApiResponse);
-  }
+    const result = await query(`SELECT id, platform, external_account_id, display_name, avatar, status, last_event_at, created_at FROM channel_accounts WHERE tenant_id = $1 ORDER BY created_at DESC`, [tenantId(req)]);
+    res.json({ success: true, message: '获取渠道列表成功', data: { channels: result.rows.map(mapChannel) } });
+  } catch (error) { next(error); }
 });
 
-// 获取渠道详情
-router.get('/:id', (req, res) => {
+router.post('/', requireRole('admin'), async (req, res, next) => {
   try {
-    const { id } = req.params;
-    const channel = mockChannels.find(c => c.id === id);
-    
-    if (!channel) {
-      return res.status(404).json({
-        success: false,
-        message: '渠道不存在',
-      } as ApiResponse);
-    }
-    
-    return res.json({
-      success: true,
-      message: '获取渠道详情成功',
-      data: { channel },
-    } as ApiResponse);
-  } catch (error) {
-    console.error('获取渠道详情错误:', error);
-    return res.status(500).json({
-      success: false,
-      message: '服务器内部错误',
-    } as ApiResponse);
-  }
+    const platform = typeof req.body?.platform === 'string' ? req.body.platform.trim() : '';
+    const externalAccountId = typeof req.body?.accountId === 'string' ? req.body.accountId.trim() : '';
+    const displayName = typeof req.body?.name === 'string' ? req.body.name.trim() : '';
+    if (!['web', 'douyin', 'kuaishou', 'wechat', 'xiaohongshu'].includes(platform) || !externalAccountId || !displayName) throw new AppError(400, 'INVALID_CHANNEL', '平台、账号标识和名称均为必填项');
+    if (platform !== 'web') throw new AppError(503, 'PLATFORM_UNVERIFIED', '该平台尚未完成当前应用的真实能力核验');
+    const result = await query(`INSERT INTO channel_accounts(id, tenant_id, platform, external_account_id, display_name, status) VALUES ($1, $2, $3, $4, $5, 'authorized') RETURNING id, platform, external_account_id, display_name, avatar, status, last_event_at, created_at`, [randomId(), tenantId(req), platform, externalAccountId, displayName]);
+    res.status(201).json({ success: true, message: '渠道已创建', data: { channel: mapChannel(result.rows[0]) } });
+  } catch (error) { next(error); }
 });
 
-// 创建渠道
-router.post('/', (req, res) => {
+router.get('/:id', async (req, res, next) => {
   try {
-    const { type, name, accountId, accountName, config } = req.body;
-    
-    const newChannel: Channel = {
-      id: Date.now().toString(),
-      tenantId: 'tenant-1', // 实际应该从认证中获取
-      type,
-      name,
-      accountId,
-      accountName,
-      status: 'offline',
-      lastHeartbeat: new Date(),
-      config: config || {
-        autoReply: true,
-        keywords: [],
-        welcomeMessage: '欢迎！',
-        silenceTimeout: 30,
-        maxConcurrent: 100,
-      },
-      createdAt: new Date(),
-    };
-    
-    mockChannels.push(newChannel);
-    
-    return res.status(201).json({
-      success: true,
-      message: '创建渠道成功',
-      data: { channel: newChannel },
-    } as ApiResponse);
-  } catch (error) {
-    console.error('创建渠道错误:', error);
-    return res.status(500).json({
-      success: false,
-      message: '服务器内部错误',
-    } as ApiResponse);
-  }
+    const result = await query(`SELECT id, platform, external_account_id, display_name, avatar, status, last_event_at, created_at FROM channel_accounts WHERE id = $1 AND tenant_id = $2`, [req.params.id, tenantId(req)]);
+    if (!result.rowCount) throw new AppError(404, 'CHANNEL_NOT_FOUND', '渠道账号不存在');
+    res.json({ success: true, message: '获取渠道成功', data: { channel: mapChannel(result.rows[0]) } });
+  } catch (error) { next(error); }
 });
 
-// 更新渠道
-router.put('/:id', (req, res) => {
+router.patch('/:id', requireRole('admin'), async (req, res, next) => {
   try {
-    const { id } = req.params;
-    const { name, config } = req.body;
-    
-    const channelIndex = mockChannels.findIndex(c => c.id === id);
-    if (channelIndex === -1) {
-      return res.status(404).json({
-        success: false,
-        message: '渠道不存在',
-      } as ApiResponse);
-    }
-    
-    mockChannels[channelIndex] = {
-      ...mockChannels[channelIndex],
-      name: name || mockChannels[channelIndex].name,
-      config: config || mockChannels[channelIndex].config,
-    };
-    
-    return res.json({
-      success: true,
-      message: '更新渠道成功',
-      data: { channel: mockChannels[channelIndex] },
-    } as ApiResponse);
-  } catch (error) {
-    console.error('更新渠道错误:', error);
-    return res.status(500).json({
-      success: false,
-      message: '服务器内部错误',
-    } as ApiResponse);
-  }
+    const name = typeof req.body?.name === 'string' ? req.body.name.trim() : undefined;
+    const status = ['authorized', 'subscribed', 'error', 'disabled', 'unconfigured'].includes(req.body?.status) ? req.body.status : undefined;
+    if (!name && !status) throw new AppError(400, 'NO_CHANGES', '没有可更新字段');
+    const result = await query(`UPDATE channel_accounts SET display_name = COALESCE($1, display_name), status = COALESCE($2, status), updated_at = NOW() WHERE id = $3 AND tenant_id = $4 RETURNING id, platform, external_account_id, display_name, avatar, status, last_event_at, created_at`, [name || null, status || null, req.params.id, tenantId(req)]);
+    if (!result.rowCount) throw new AppError(404, 'CHANNEL_NOT_FOUND', '渠道账号不存在');
+    res.json({ success: true, message: '渠道已更新', data: { channel: mapChannel(result.rows[0]) } });
+  } catch (error) { next(error); }
 });
 
-// 删除渠道
-router.delete('/:id', (req, res) => {
+router.delete('/:id', requireRole('admin'), async (req, res, next) => {
   try {
-    const { id } = req.params;
-    const channelIndex = mockChannels.findIndex(c => c.id === id);
-    
-    if (channelIndex === -1) {
-      return res.status(404).json({
-        success: false,
-        message: '渠道不存在',
-      } as ApiResponse);
-    }
-    
-    mockChannels.splice(channelIndex, 1);
-    
-    return res.json({
-      success: true,
-      message: '删除渠道成功',
-    } as ApiResponse);
-  } catch (error) {
-    console.error('删除渠道错误:', error);
-    return res.status(500).json({
-      success: false,
-      message: '服务器内部错误',
-    } as ApiResponse);
-  }
+    const result = await query(`UPDATE channel_accounts SET status = 'disabled', credentials_encrypted = NULL, updated_at = NOW() WHERE id = $1 AND tenant_id = $2 RETURNING id`, [req.params.id, tenantId(req)]);
+    if (!result.rowCount) throw new AppError(404, 'CHANNEL_NOT_FOUND', '渠道账号不存在');
+    res.json({ success: true, message: '渠道已停用', data: { id: req.params.id } });
+  } catch (error) { next(error); }
 });
 
-// 获取渠道状态
-router.get('/:id/status', (req, res) => {
+router.get('/:id/status', async (req, res, next) => {
   try {
-    const { id } = req.params;
-    const channel = mockChannels.find(c => c.id === id);
-    
-    if (!channel) {
-      return res.status(404).json({
-        success: false,
-        message: '渠道不存在',
-      } as ApiResponse);
-    }
-    
-    return res.json({
-      success: true,
-      message: '获取渠道状态成功',
-      data: {
-        status: channel.status,
-        lastHeartbeat: channel.lastHeartbeat,
-        online: channel.status === 'online',
-      },
-    } as ApiResponse);
-  } catch (error) {
-    console.error('获取渠道状态错误:', error);
-    return res.status(500).json({
-      success: false,
-      message: '服务器内部错误',
-    } as ApiResponse);
-  }
+    const result = await query(`SELECT id, platform, status, last_event_at AS "lastEventAt" FROM channel_accounts WHERE id = $1 AND tenant_id = $2`, [req.params.id, tenantId(req)]);
+    if (!result.rowCount) throw new AppError(404, 'CHANNEL_NOT_FOUND', '渠道账号不存在');
+    const row = result.rows[0] as { status: string; platform: string };
+    res.json({ success: true, message: '获取渠道状态成功', data: { ...result.rows[0], connected: ['authorized', 'subscribed'].includes(row.status), subscription: row.status === 'subscribed', replyCapability: row.platform === 'web' ? 'verified' : 'unverified' } });
+  } catch (error) { next(error); }
 });
 
-module.exports = router;
+export default router;

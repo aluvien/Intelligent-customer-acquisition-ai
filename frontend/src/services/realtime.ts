@@ -40,13 +40,15 @@ export function connectRealtime(
         .get<{ success: boolean; data: { ticket: string } }>('/ws/ticket')
         .then((res) => res.data.data.ticket);
 
+      if (closed) return;
+
       const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
       socket = new WebSocket(`${proto}://${window.location.host}/ws?ticket=${ticket}`);
 
       socket.onopen = () => {
         retries = 0;
         heartbeatTimer = setInterval(() => {
-          socket?.send(JSON.stringify({ type: 'ping' }));
+          if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: 'ping' }));
         }, 25000);
         events.onOpen?.();
       };

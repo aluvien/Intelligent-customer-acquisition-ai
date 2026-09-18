@@ -72,8 +72,8 @@ Headers: Authorization: Bearer {access_token}
 #### appID 和 appSecret（固定值）
 ```go
 // 我们从抖音开放平台已获取
-appID = "aw6hj204nms0vumu"
-appSecret = "b46cd587e094aae751e45380f9c0e72d"
+appID = "REVOKED_DOUYIN_APP_ID"
+appSecret = "REVOKED_DOUYIN_APP_SECRET"
 
 // 配置在环境变量中
 ```
@@ -120,7 +120,7 @@ userInput := "123456789"
 ```go
 // 传入所有参数
 channel := NewDouyinChannel(pipeline)
-channel.appID = "aw6hj204nms0vumu"
+channel.appID = "REVOKED_DOUYIN_APP_ID"
 channel.accessToken = access_token  // 从数据库获取
 channel.roomID = roomID             // 用户提供
 channel.Start(roomID)

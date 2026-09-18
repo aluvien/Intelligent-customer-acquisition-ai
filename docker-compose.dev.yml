@@ -1,0 +1,40 @@
+services:
+  postgres:
+    ports: ["127.0.0.1:5432:5432"]
+  redis:
+    ports: ["127.0.0.1:6379:6379"]
+  backend:
+    build:
+      target: builder
+    environment:
+      NODE_ENV: development
+      PORT: 3001
+      DATABASE_URL: postgresql://${DB_USER}:${DB_PASSWORD}@postgres:5432/${DB_NAME}
+      REDIS_URL: redis://redis:6379
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET must be set}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?ENCRYPTION_KEY must be set}
+      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:3000}
+      COOKIE_SECURE: "false"
+    command: ["sh", "-c", "npm run migrate && npm run dev"]
+    volumes:
+      - ./backend/src:/app/src
+      - ./backend/package.json:/app/package.json:ro
+      - ./backend/package-lock.json:/app/package-lock.json:ro
+      - ./backend/tsconfig.json:/app/tsconfig.json:ro
+      - backend_node_modules:/app/node_modules
+    ports: ["127.0.0.1:3001:3001"]
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      target: builder
+      args: { REACT_APP_API_URL: http://localhost:3001/api }
+    command: ["npm", "start"]
+    volumes:
+      - ./frontend:/app
+      - frontend_node_modules:/app/node_modules
+    ports: ["127.0.0.1:3000:3000"]
+
+volumes:
+  backend_node_modules:
+  frontend_node_modules:

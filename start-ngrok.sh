@@ -1,18 +1,6 @@
-#!/bin/bash
+#!/usr/bin/env bash
+set -euo pipefail
 
-# CEO，启动ngrok的独立脚本
-# 使用方法：bash start-ngrok.sh
-
-echo "🚀 启动ngrok..."
-echo "=========================="
-
-# 停止已有的ngrok
-pkill ngrok 2>/dev/null
-sleep 1
-
-# 启动ngrok（前台运行，方便查看URL）
-echo "⏳ ngrok正在启动..."
-echo "⚠️  重要：ngrok会显示公网URL，请记录该URL"
-echo ""
-ngrok http 8080
-
+echo "当前抖音/平台适配器尚未完成真实核验，不启动 ngrok 或伪造 OAuth 回调。"
+echo "请先完成 docs/rebuild/DOUYIN_CAPABILITY_MATRIX.md 中的 T7 证据要求。" >&2
+exit 1

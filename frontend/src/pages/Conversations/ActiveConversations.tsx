@@ -1,689 +1,124 @@
-import React, { useState, useEffect } from 'react';
-import {
-  Card,
-  Row,
-  Col,
-  List,
-  Avatar,
-  Badge,
-  Button,
-  Input,
-  Select,
-  Space,
-  Tag,
-  Tooltip,
-  Modal,
-  Form,
-  message,
-  Tabs,
-  Divider,
-  Typography,
-  Rate,
-  Progress,
-  Statistic,
-  Alert,
-  Drawer,
-  Switch,
-} from 'antd';
-import {
-  SearchOutlined,
-  FilterOutlined,
-  MessageOutlined,
-  UserOutlined,
-  PhoneOutlined,
-  MailOutlined,
-  ClockCircleOutlined,
-  CheckCircleOutlined,
-  CloseCircleOutlined,
-  MoreOutlined,
-  SendOutlined,
-  SmileOutlined,
-  PaperClipOutlined,
-  RobotOutlined,
-  TeamOutlined,
-  ThunderboltOutlined,
-  EyeOutlined,
-  EditOutlined,
-  DeleteOutlined,
-} from '@ant-design/icons';
-
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { Alert, Badge, Button, Card, Empty, Input, List, Select, Space, Spin, Tag, Typography, message } from 'antd';
+import { CloseCircleOutlined, MessageOutlined, SendOutlined, UserOutlined } from '@ant-design/icons';
+import api from '../../services/api';
+import { connectRealtime } from '../../services/realtime';
 import BusinessPageHeader from '../../components/BusinessPageHeader';
 import { BUSINESS_THEME } from '../../config/brand';
 
-const { TextArea } = Input;
-const { Option } = Select;
-const { Text, Paragraph } = Typography;
-const { TabPane } = Tabs;
+type Conversation = {
+  id: string;
+  userNickname: string;
+  userId: string;
+  status: string;
+  mode: string;
+  messageCount: number;
+  lastMessageAt: string;
+  latestMessage?: { content: string; direction: string } | null;
+};
 
-// 模拟数据
-const mockConversations = [
-  {
-    id: '1',
-    user: {
-      name: '张先生',
-      avatar: 'https://api.dicebear.com/7.x/miniavs/svg?seed=1',
-      phone: '138****8888',
-      email: 'zhang@example.com',
-      source: '抖音',
-      location: '北京市朝阳区',
-    },
-    lastMessage: {
-      content: '请问你们的产品价格是多少？我想了解一下具体的报价。',
-      time: '2分钟前',
-      type: 'text',
-      isFromUser: true,
-    },
-    status: 'active',
-    priority: 'high',
-    assignedTo: '客服小王',
-    tags: ['价格咨询', '潜在客户'],
-    duration: '15分钟',
-    messageCount: 8,
-    satisfaction: null,
-    aiAssistance: true,
-  },
-  {
-    id: '2',
-    user: {
-      name: '李女士',
-      avatar: 'https://api.dicebear.com/7.x/miniavs/svg?seed=2',
-      phone: '139****9999',
-      email: 'li@example.com',
-      source: '快手',
-      location: '上海市浦东新区',
-    },
-    lastMessage: {
-      content: '我想了解一下售后服务，包括保修期和维修流程。',
-      time: '5分钟前',
-      type: 'text',
-      isFromUser: true,
-    },
-    status: 'waiting',
-    priority: 'medium',
-    assignedTo: null,
-    tags: ['售后服务', '咨询'],
-    duration: '8分钟',
-    messageCount: 5,
-    satisfaction: null,
-    aiAssistance: false,
-  },
-  {
-    id: '3',
-    user: {
-      name: '王总',
-      avatar: 'https://api.dicebear.com/7.x/miniavs/svg?seed=3',
-      phone: '137****7777',
-      email: 'wang@example.com',
-      source: '视频号',
-      location: '广州市天河区',
-    },
-    lastMessage: {
-      content: '好的，我考虑一下，稍后联系您。',
-      time: '10分钟前',
-      type: 'text',
-      isFromUser: true,
-    },
-    status: 'closed',
-    priority: 'low',
-    assignedTo: '客服小李',
-    tags: ['已成交', 'VIP客户'],
-    duration: '45分钟',
-    messageCount: 23,
-    satisfaction: 5,
-    aiAssistance: true,
-  },
-];
-
-const mockMessages = [
-  {
-    id: '1',
-    content: '您好，欢迎咨询我们的产品！请问有什么可以帮助您的吗？',
-    time: '2024-01-15 14:00:00',
-    isFromUser: false,
-    sender: 'AI助手',
-    type: 'text',
-  },
-  {
-    id: '2',
-    content: '请问你们的产品价格是多少？',
-    time: '2024-01-15 14:01:00',
-    isFromUser: true,
-    sender: '张先生',
-    type: 'text',
-  },
-  {
-    id: '3',
-    content: '我们的产品价格根据配置不同有所差异，基础版是2999元，专业版是5999元，企业版是9999元。您比较倾向于哪个版本呢？',
-    time: '2024-01-15 14:01:30',
-    isFromUser: false,
-    sender: 'AI助手',
-    type: 'text',
-  },
-  {
-    id: '4',
-    content: '我想了解一下具体的报价。',
-    time: '2024-01-15 14:02:00',
-    isFromUser: true,
-    sender: '张先生',
-    type: 'text',
-  },
-];
+type ConversationMessage = {
+  id: string;
+  content: string;
+  direction: 'inbound' | 'outbound';
+  senderType: 'visitor' | 'human' | 'ai';
+  deliveryStatus: string;
+  createdAt: string;
+};
 
 const ActiveConversations: React.FC = () => {
-  const [loading, setLoading] = useState(false);
-  const [conversations, setConversations] = useState(mockConversations);
-  const [selectedConversation, setSelectedConversation] = useState<any>(null);
-  const [messages, setMessages] = useState(mockMessages);
-  const [replyModalVisible, setReplyModalVisible] = useState(false);
-  const [replyForm] = Form.useForm();
-  const [searchText, setSearchText] = useState('');
-  const [statusFilter, setStatusFilter] = useState('all');
-  const [priorityFilter, setPriorityFilter] = useState('all');
+  const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [selected, setSelected] = useState<Conversation | null>(null);
+  const [messages, setMessages] = useState<ConversationMessage[]>([]);
+  const [content, setContent] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [status, setStatus] = useState('active');
+  const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    loadConversations();
-  }, []);
-
-  const loadConversations = async () => {
+  const loadConversations = useCallback(async () => {
     setLoading(true);
+    setError(null);
     try {
-      // 模拟API调用
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      setConversations(mockConversations);
-    } catch (error) {
-      message.error('加载对话列表失败');
+      const response = await api.get('/conversations', { params: { status: status === 'all' ? undefined : status, limit: 100 } });
+      setConversations(response.data.data.conversations || []);
+    } catch (err: any) {
+      setError(err?.response?.data?.message || '对话数据加载失败');
     } finally {
       setLoading(false);
     }
-  };
+  }, [status]);
 
-  const handleConversationSelect = (conversation: any) => {
-    setSelectedConversation(conversation);
-    // 加载该对话的消息
-    setMessages(mockMessages);
-  };
-
-  const handleReply = async (values: any) => {
+  const loadMessages = useCallback(async (conversation: Conversation) => {
+    setSelected(conversation);
+    setDetailLoading(true);
     try {
-      // 模拟发送回复
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      message.success('回复发送成功');
-      setReplyModalVisible(false);
-      replyForm.resetFields();
-    } catch (error) {
-      message.error('回复发送失败');
+      const response = await api.get(`/conversations/${conversation.id}/messages`);
+      setMessages(response.data.data.messages || []);
+    } catch (err: any) {
+      message.error(err?.response?.data?.message || '消息加载失败');
+    } finally {
+      setDetailLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { void loadConversations(); }, [loadConversations]);
+
+  useEffect(() => {
+    const disconnect = connectRealtime({
+      onEvent: (event) => {
+        if (event.type !== 'message') return;
+        const incoming = event.data as ConversationMessage & { conversationId: string };
+        setConversations((items) => items.map((item) => item.id === incoming.conversationId ? { ...item, messageCount: item.messageCount + 1, lastMessageAt: incoming.createdAt || new Date().toISOString(), latestMessage: { content: incoming.content, direction: incoming.direction } } : item));
+        if (selected?.id === incoming.conversationId) setMessages((items) => items.some((item) => item.id === incoming.id) ? items : [...items, incoming]);
+      },
+    });
+    return disconnect;
+  }, [selected?.id]);
+
+  const counts = useMemo(() => ({ active: conversations.filter((item) => item.status === 'active').length, closed: conversations.filter((item) => item.status === 'closed').length }), [conversations]);
+
+  const send = async () => {
+    if (!selected || !content.trim()) return;
+    try {
+      const response = await api.post(`/conversations/${selected.id}/messages`, { content: content.trim() });
+      setContent('');
+      message.success(response.data.message || '回复已进入发送队列');
+      await loadMessages(selected);
+    } catch (err: any) {
+      message.error(err?.response?.data?.message || '回复发送失败');
     }
   };
 
-  const handleCloseConversation = async (conversationId: string) => {
+  const close = async () => {
+    if (!selected) return;
     try {
-      // 模拟关闭对话
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      setConversations(prev => 
-        prev.map(conv => 
-          conv.id === conversationId 
-            ? { ...conv, status: 'closed' }
-            : conv
-        )
-      );
+      await api.put(`/conversations/${selected.id}/close`);
       message.success('对话已关闭');
-    } catch (error) {
-      message.error('关闭对话失败');
+      await loadConversations();
+      setSelected((item) => item ? { ...item, status: 'closed' } : item);
+    } catch (err: any) {
+      message.error(err?.response?.data?.message || '关闭对话失败');
     }
   };
 
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case 'active': return 'processing';
-      case 'waiting': return 'warning';
-      case 'closed': return 'default';
-      default: return 'default';
-    }
-  };
-
-  const getStatusText = (status: string) => {
-    switch (status) {
-      case 'active': return '进行中';
-      case 'waiting': return '等待中';
-      case 'closed': return '已结束';
-      default: return '未知';
-    }
-  };
-
-  const getPriorityColor = (priority: string) => {
-    switch (priority) {
-      case 'high': return 'red';
-      case 'medium': return 'orange';
-      case 'low': return 'green';
-      default: return 'default';
-    }
-  };
-
-  const getPriorityText = (priority: string) => {
-    switch (priority) {
-      case 'high': return '高';
-      case 'medium': return '中';
-      case 'low': return '低';
-      default: return '未知';
-    }
-  };
-
-  const filteredConversations = conversations.filter(conv => {
-    const matchesSearch = conv.user.name.toLowerCase().includes(searchText.toLowerCase()) ||
-                         conv.lastMessage.content.toLowerCase().includes(searchText.toLowerCase());
-    const matchesStatus = statusFilter === 'all' || conv.status === statusFilter;
-    const matchesPriority = priorityFilter === 'all' || conv.priority === priorityFilter;
-    return matchesSearch && matchesStatus && matchesPriority;
-  });
-
-  return (
-    <div style={{ padding: '4px 0' }}>
-      {/* 页面标题和统计 */}
-      <BusinessPageHeader
-        icon={<MessageOutlined />}
-        title="进行中对话"
-        subtitle="星链云客系统 · 管理所有进行中的客户对话，提供实时客服支持"
-        extra={
-          <Space>
-            <Button icon={<ThunderboltOutlined />}>AI助手</Button>
-            <Button type="primary" icon={<MessageOutlined />}>新建对话</Button>
-          </Space>
-        }
-      />
-
-      {/* 统计卡片 */}
-      <Row gutter={[16, 16]} style={{ marginBottom: '24px' }}>
-        <Col xs={24} sm={8} lg={6}>
-          <Card>
-            <Statistic
-              title="总对话数"
-              value={conversations.length}
-              prefix={<MessageOutlined />}
-              valueStyle={{ color: BUSINESS_THEME.primary }}
-            />
-          </Card>
-        </Col>
-        <Col xs={24} sm={8} lg={6}>
-          <Card>
-            <Statistic
-              title="进行中"
-              value={conversations.filter(c => c.status === 'active').length}
-              prefix={<EyeOutlined />}
-              valueStyle={{ color: '#12A086' }}
-            />
-          </Card>
-        </Col>
-        <Col xs={24} sm={8} lg={6}>
-          <Card>
-            <Statistic
-              title="等待中"
-              value={conversations.filter(c => c.status === 'waiting').length}
-              prefix={<ClockCircleOutlined />}
-              valueStyle={{ color: '#D97706' }}
-            />
-          </Card>
-        </Col>
-        <Col xs={24} sm={8} lg={6}>
-          <Card>
-            <Statistic
-              title="平均满意度"
-              value={4.2}
-              prefix={<Rate disabled defaultValue={4} />}
-              valueStyle={{ color: BUSINESS_THEME.primary }}
-              suffix="/5"
-            />
-          </Card>
-        </Col>
-      </Row>
-
-      <Row gutter={[16, 16]}>
-        {/* 对话列表 */}
-        <Col xs={24} lg={8}>
-          <Card 
-            title="对话列表" 
-            extra={
-              <Text type="secondary">{filteredConversations.length} 个会话</Text>
-            }
-          >
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 12 }}>
-              <Input
-                placeholder="搜索对话..."
-                prefix={<SearchOutlined />}
-                value={searchText}
-                onChange={(e) => setSearchText(e.target.value)}
-                style={{ width: 200, flex: '1 1 160px' }}
-              />
-              <Select
-                value={statusFilter}
-                onChange={setStatusFilter}
-                style={{ width: 110 }}
-              >
-                <Option value="all">全部</Option>
-                <Option value="active">进行中</Option>
-                <Option value="waiting">等待中</Option>
-                <Option value="closed">已结束</Option>
-              </Select>
-              <Select
-                value={priorityFilter}
-                onChange={setPriorityFilter}
-                style={{ width: 110 }}
-              >
-                <Option value="all">优先级</Option>
-                <Option value="high">高</Option>
-                <Option value="medium">中</Option>
-                <Option value="low">低</Option>
-              </Select>
-            </div>
-            <List
-              dataSource={filteredConversations}
-              loading={loading}
-              renderItem={(conversation) => (
-                <List.Item
-                  style={{
-                    cursor: 'pointer',
-                    backgroundColor: selectedConversation?.id === conversation.id ? BUSINESS_THEME.primaryActiveBg : '#FFFFFF',
-                    padding: '12px',
-                    borderRadius: '6px',
-                    marginBottom: '8px',
-                    border: selectedConversation?.id === conversation.id ? `1px solid ${BUSINESS_THEME.primary}` : `1px solid ${BUSINESS_THEME.border}`,
-                  }}
-                  onClick={() => handleConversationSelect(conversation)}
-                >
-                  <List.Item.Meta
-                    avatar={
-                      <Badge 
-                        dot={conversation.status === 'active'} 
-                        color={conversation.status === 'active' ? '#12A086' : BUSINESS_THEME.textSecondary}
-                      >
-                        <Avatar src={conversation.user.avatar} icon={<UserOutlined />} />
-                      </Badge>
-                    }
-                    title={
-                      <Space>
-                        <span>{conversation.user.name}</span>
-                        <Tag color={getPriorityColor(conversation.priority)}>
-                          {getPriorityText(conversation.priority)}
-                        </Tag>
-                        <Badge 
-                          status={getStatusColor(conversation.status)} 
-                          text={getStatusText(conversation.status)} 
-                        />
-                      </Space>
-                    }
-                    description={
-                      <div>
-                        <Paragraph 
-                          ellipsis={{ rows: 2 }} 
-                          style={{ margin: 0, color: BUSINESS_THEME.textSecondary }}
-                        >
-                          {conversation.lastMessage.content}
-                        </Paragraph>
-                        <div style={{ marginTop: '4px' }}>
-                          <Space size="small">
-                            <Text type="secondary" style={{ fontSize: '12px' }}>
-                              {conversation.lastMessage.time}
-                            </Text>
-                            <Text type="secondary" style={{ fontSize: '12px' }}>
-                              {conversation.messageCount}条消息
-                            </Text>
-                            {conversation.aiAssistance && (
-                              <Tag color="blue">AI</Tag>
-                            )}
-                          </Space>
-                        </div>
-                      </div>
-                    }
-                  />
-                </List.Item>
-              )}
-            />
-          </Card>
-        </Col>
-
-        {/* 对话详情 */}
-        <Col xs={24} lg={16}>
-          {selectedConversation ? (
-            <Card
-              title={
-                <Space>
-                  <Avatar src={selectedConversation.user.avatar} icon={<UserOutlined />} />
-                  <span>{selectedConversation.user.name}</span>
-                  <Tag color={getPriorityColor(selectedConversation.priority)}>
-                    {getPriorityText(selectedConversation.priority)}
-                  </Tag>
-                  <Badge 
-                    status={getStatusColor(selectedConversation.status)} 
-                    text={getStatusText(selectedConversation.status)} 
-                  />
-                </Space>
-              }
-              extra={
-                <Space>
-                  <Button 
-                    type="link" 
-                    icon={<PhoneOutlined />}
-                    onClick={() => message.info('拨号功能待实现')}
-                  >
-                    拨号
-                  </Button>
-                  <Button 
-                    type="link" 
-                    icon={<EditOutlined />}
-                    onClick={() => message.info('编辑功能待实现')}
-                  >
-                    编辑
-                  </Button>
-                  <Button 
-                    type="link" 
-                    icon={<CloseCircleOutlined />}
-                    onClick={() => handleCloseConversation(selectedConversation.id)}
-                  >
-                    关闭
-                  </Button>
-                </Space>
-              }
-            >
-              <Tabs defaultActiveKey="messages">
-                <TabPane tab="消息记录" key="messages">
-                  <div style={{ height: '400px', overflowY: 'auto', padding: '16px 0' }}>
-                    {messages.map((message) => (
-                      <div
-                        key={message.id}
-                        style={{
-                          display: 'flex',
-                          justifyContent: message.isFromUser ? 'flex-end' : 'flex-start',
-                          marginBottom: '16px',
-                        }}
-                      >
-                        <div
-                          style={{
-                            maxWidth: '70%',
-                            padding: '8px 12px',
-                            borderRadius: '12px',
-                            backgroundColor: message.isFromUser ? BUSINESS_THEME.primary : BUSINESS_THEME.contentBg,
-                            color: message.isFromUser ? '#fff' : '#000',
-                          }}
-                        >
-                          <div style={{ marginBottom: '4px' }}>
-                            <Text 
-                              style={{ 
-                                fontSize: '12px', 
-                                color: message.isFromUser ? '#fff' : BUSINESS_THEME.textSecondary 
-                              }}
-                            >
-                              {message.sender} · {message.time}
-                            </Text>
-                          </div>
-                          <div>{message.content}</div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                  
-                  <Divider />
-                  
-                  <Space.Compact style={{ width: '100%' }}>
-                    <Input
-                      placeholder="输入回复内容..."
-                      onPressEnter={() => setReplyModalVisible(true)}
-                    />
-                    <Button 
-                      type="primary" 
-                      icon={<SendOutlined />}
-                      onClick={() => setReplyModalVisible(true)}
-                    >
-                      发送
-                    </Button>
-                  </Space.Compact>
-                </TabPane>
-                
-                <TabPane tab="客户信息" key="customer">
-                  <Row gutter={[16, 16]}>
-                    <Col span={12}>
-                      <div>
-                        <strong>姓名:</strong> {selectedConversation.user.name}
-                      </div>
-                      <div style={{ marginTop: '8px' }}>
-                        <strong>电话:</strong> {selectedConversation.user.phone}
-                      </div>
-                      <div style={{ marginTop: '8px' }}>
-                        <strong>邮箱:</strong> {selectedConversation.user.email}
-                      </div>
-                    </Col>
-                    <Col span={12}>
-                      <div>
-                        <strong>来源渠道:</strong> 
-                        <Tag color="blue" style={{ marginLeft: '8px' }}>
-                          {selectedConversation.user.source}
-                        </Tag>
-                      </div>
-                      <div style={{ marginTop: '8px' }}>
-                        <strong>地区:</strong> {selectedConversation.user.location}
-                      </div>
-                      <div style={{ marginTop: '8px' }}>
-                        <strong>标签:</strong>
-                        <Space style={{ marginLeft: '8px' }}>
-                          {selectedConversation.tags.map((tag: string, index: number) => (
-                            <Tag key={index} color="green">{tag}</Tag>
-                          ))}
-                        </Space>
-                      </div>
-                    </Col>
-                  </Row>
-                  
-                  <Divider />
-                  
-                  <Row gutter={[16, 16]}>
-                    <Col span={8}>
-                      <Statistic
-                        title="对话时长"
-                        value={selectedConversation.duration}
-                        prefix={<ClockCircleOutlined />}
-                      />
-                    </Col>
-                    <Col span={8}>
-                      <Statistic
-                        title="消息数量"
-                        value={selectedConversation.messageCount}
-                        prefix={<MessageOutlined />}
-                      />
-                    </Col>
-                    <Col span={8}>
-                      <Statistic
-                        title="满意度"
-                        value={selectedConversation.satisfaction || '未评价'}
-                        prefix={<Rate disabled defaultValue={selectedConversation.satisfaction || 0} />}
-                      />
-                    </Col>
-                  </Row>
-                </TabPane>
-                
-                <TabPane tab="AI助手" key="ai">
-                  <Alert
-                    message="AI智能助手"
-                    description="AI助手正在帮助您分析对话内容，提供智能回复建议和客户情绪分析。"
-                    type="info"
-                    showIcon
-                    style={{ marginBottom: '16px' }}
-                  />
-                  
-                  <div style={{ marginBottom: '16px' }}>
-                    <h4>智能回复建议:</h4>
-                    <Card size="small">
-                      <p>根据客户询问的产品价格问题，建议回复：</p>
-                      <p style={{ color: BUSINESS_THEME.primary, fontStyle: 'italic' }}>
-                        "感谢您的咨询！我们的产品价格根据配置不同有所差异，基础版2999元，专业版5999元，企业版9999元。我可以为您详细介绍各版本的功能特点，帮助您选择最适合的方案。"
-                      </p>
-                    </Card>
-                  </div>
-                  
-                  <div>
-                    <h4>客户情绪分析:</h4>
-                    <Space>
-                      <Tag color="green">积极</Tag>
-                      <Tag color="blue">理性</Tag>
-                      <Tag color="orange">谨慎</Tag>
-                    </Space>
-                  </div>
-                </TabPane>
-              </Tabs>
-            </Card>
-          ) : (
-            <Card style={{ textAlign: 'center', padding: '60px 0' }}>
-              <MessageOutlined style={{ fontSize: '48px', color: BUSINESS_THEME.border, marginBottom: '16px' }} />
-              <p style={{ color: BUSINESS_THEME.textSecondary, fontSize: '16px' }}>请选择一个对话查看详情</p>
-            </Card>
-          )}
-        </Col>
-      </Row>
-
-      {/* 回复弹窗 */}
-      <Modal
-        title="发送回复"
-        open={replyModalVisible}
-        onCancel={() => setReplyModalVisible(false)}
-        onOk={() => replyForm.submit()}
-        width={600}
-      >
-        <Form
-          form={replyForm}
-          layout="vertical"
-          onFinish={handleReply}
-        >
-          <Form.Item
-            name="content"
-            label="回复内容"
-            rules={[{ required: true, message: '请输入回复内容' }]}
-          >
-            <TextArea
-              rows={4}
-              placeholder="请输入回复内容..."
-            />
-          </Form.Item>
-          
-          <Form.Item
-            name="type"
-            label="回复类型"
-            initialValue="text"
-          >
-            <Select>
-              <Option value="text">文本</Option>
-              <Option value="image">图片</Option>
-              <Option value="file">文件</Option>
-            </Select>
-          </Form.Item>
-          
-          <Form.Item
-            name="aiAssistance"
-            label="AI辅助"
-            valuePropName="checked"
-          >
-            <Switch />
-          </Form.Item>
-        </Form>
-      </Modal>
+  return <div style={{ padding: '4px 0' }}>
+    <BusinessPageHeader icon={<MessageOutlined />} title="客服工作台" subtitle="真实会话、消息状态与人工接管" extra={<Space><Badge status="processing" text={`${counts.active} 个进行中`} /><Button onClick={() => void loadConversations()}>刷新</Button></Space>} />
+    {error && <Alert type="error" showIcon message={error} style={{ marginBottom: 16 }} />}
+    <div style={{ display: 'grid', gridTemplateColumns: 'minmax(280px, 360px) 1fr', gap: 16 }}>
+      <Card title="会话列表" extra={<Select value={status} onChange={setStatus} options={[{ value: 'active', label: '进行中' }, { value: 'transferred', label: '已转人工' }, { value: 'closed', label: '已关闭' }, { value: 'all', label: '全部' }]} style={{ width: 110 }} />}>
+        {loading ? <Spin /> : conversations.length === 0 ? <Empty description="暂无真实会话" /> : <List dataSource={conversations} renderItem={(item) => <List.Item onClick={() => void loadMessages(item)} style={{ cursor: 'pointer', background: selected?.id === item.id ? BUSINESS_THEME.primaryActiveBg : undefined, padding: 12, borderRadius: 8 }}>
+          <List.Item.Meta avatar={<Badge dot={item.status === 'active'}><UserOutlined /></Badge>} title={<Space><span>{item.userNickname}</span><Tag>{item.mode === 'human' ? '人工' : item.mode === 'auto' ? '自动' : 'AI草稿'}</Tag></Space>} description={<Typography.Paragraph ellipsis={{ rows: 2 }} style={{ margin: 0 }}>{item.latestMessage?.content || '暂无消息'}<br /><Typography.Text type="secondary">{item.messageCount} 条 · {new Date(item.lastMessageAt).toLocaleString()}</Typography.Text></Typography.Paragraph>} />
+        </List.Item>} />}
+      </Card>
+      <Card title={selected ? `${selected.userNickname} · ${selected.status}` : '选择一个会话'} extra={selected && <Space><Button danger icon={<CloseCircleOutlined />} onClick={() => void close()} disabled={selected.status === 'closed'}>关闭</Button><Select value={selected.mode} onChange={async (mode) => { await api.put(`/conversations/${selected.id}/mode`, { mode }); setSelected({ ...selected, mode }); }} options={[{ value: 'human', label: '人工接管' }, { value: 'ai_draft', label: 'AI草稿' }, { value: 'auto', label: '自动回复（管理员）' }]} style={{ width: 150 }} /></Space>}>
+        {!selected ? <Empty description="选择会话查看历史" /> : detailLoading ? <Spin /> : <>
+          <div style={{ height: 420, overflowY: 'auto', padding: '8px 0' }}>{messages.map((item) => <div key={item.id} style={{ display: 'flex', justifyContent: item.direction === 'outbound' ? 'flex-end' : 'flex-start', marginBottom: 12 }}><div style={{ maxWidth: '72%', padding: '10px 12px', borderRadius: 10, background: item.direction === 'outbound' ? BUSINESS_THEME.primary : '#f4f6f8', color: item.direction === 'outbound' ? '#fff' : '#1A2332' }}><div>{item.content}</div><Typography.Text style={{ fontSize: 11, color: item.direction === 'outbound' ? 'rgba(255,255,255,.75)' : '#778' }}>{new Date(item.createdAt).toLocaleString()} · {item.deliveryStatus}</Typography.Text></div></div>)}</div>
+          <Space.Compact style={{ width: '100%' }}><Input.TextArea autoSize={{ minRows: 2, maxRows: 5 }} value={content} onChange={(event) => setContent(event.target.value)} onPressEnter={(event) => { if (!event.shiftKey) { event.preventDefault(); void send(); } }} placeholder="输入人工回复，Enter 发送，Shift+Enter 换行" /><Button type="primary" icon={<SendOutlined />} onClick={() => void send()}>发送</Button></Space.Compact>
+        </>}
+      </Card>
     </div>
-  );
+  </div>;
 };
 
 export default ActiveConversations;

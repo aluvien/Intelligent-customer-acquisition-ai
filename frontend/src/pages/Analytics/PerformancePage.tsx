@@ -1,39 +1,25 @@
-import React from 'react';
-import { Card, Button, Space } from 'antd';
-import { BarChartOutlined, PlusOutlined, SettingOutlined } from '@ant-design/icons';
-import BusinessEmptyState from '../../components/BusinessEmptyState';
-import { BUSINESS_THEME } from '../../config/brand';
+import React, { useCallback, useEffect, useState } from 'react';
+import { Alert, Button, Card, Empty, Table, message } from 'antd';
+import { BarChartOutlined, ReloadOutlined } from '@ant-design/icons';
+import api from '../../services/api';
+import BusinessPageHeader from '../../components/BusinessPageHeader';
 
 const PerformancePage: React.FC = () => {
-  return (
-    <div style={{ padding: '4px 0' }}>
-      <div style={{ marginBottom: '20px' }}>
-        <h1 style={{ margin: 0, fontSize: '22px', fontWeight: 600, color: BUSINESS_THEME.textPrimary }}>
-          <BarChartOutlined style={{ marginRight: '8px', color: BUSINESS_THEME.primary }} />
-          客服绩效
-        </h1>
-        <p style={{ margin: '8px 0 0 0', color: BUSINESS_THEME.textSecondary, fontSize: 13 }}>
-          分析客服团队的工作绩效与效率
-        </p>
-      </div>
-
-      <Card
-        title="客服绩效分析"
-        extra={
-          <Space>
-            <Button icon={<SettingOutlined />}>设置</Button>
-            <Button type="primary" icon={<PlusOutlined />}>新建报告</Button>
-          </Space>
-        }
-      >
-        <BusinessEmptyState
-          icon={<BarChartOutlined />}
-          title="客服绩效 · 规划中"
-          description="统计响应时长、解决率与转化贡献。当前为企业版规划模块，开通后支持按人员、班组多维考核。"
-        />
-      </Card>
-    </div>
-  );
+  const [rows, setRows] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const load = useCallback(async () => {
+    setLoading(true); setError(null);
+    try { const response = await api.get('/analytics/performance'); setRows(response.data.data.performance || []); }
+    catch (err: any) { const text = err?.response?.data?.message || '客服绩效加载失败'; setError(text); message.error(text); }
+    finally { setLoading(false); }
+  }, []);
+  useEffect(() => { void load(); }, [load]);
+  return <div style={{ padding: '4px 0' }}>
+    <BusinessPageHeader icon={<BarChartOutlined />} title="客服绩效" subtitle="统计当前企业已分配的会话与线索，不填充虚构指标" extra={<Button icon={<ReloadOutlined />} onClick={() => void load()}>刷新</Button>} />
+    {error && <Alert type="error" showIcon message={error} style={{ marginBottom: 16 }} />}
+    <Card title="客服数据"><Table rowKey="agentId" loading={loading} dataSource={rows} locale={{ emptyText: <Empty description="暂无已分配的客服数据" /> }} pagination={false} columns={[{ title: '客服', dataIndex: 'agent' }, { title: '会话', dataIndex: 'conversations' }, { title: '线索', dataIndex: 'leads' }]} /></Card>
+  </div>;
 };
 
 export default PerformancePage;

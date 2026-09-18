@@ -7,6 +7,7 @@ import ProtectedRoute from './components/ProtectedRoute';
 import Layout from './components/Layout';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
+import ChatWidget from './pages/ChatWidget';
 
 // 渠道中心页面
 import DouyinPage from './pages/Channels/DouyinPage';
@@ -48,7 +49,7 @@ import BillingPage from './pages/System/BillingPage';
 import MonitoringPage from './pages/System/MonitoringPage';
 
 import 'antd/dist/reset.css';
-import { BRAND, BUSINESS_THEME } from './config/brand';
+import { BUSINESS_THEME } from './config/brand';
 
 const App: React.FC = () => {
   return (
@@ -91,6 +92,7 @@ const App: React.FC = () => {
         <Router>
           <Routes>
             <Route path="/login" element={<Login />} />
+            <Route path="/chat/:widgetId" element={<ChatWidget />} />
             <Route
               path="/*"
               element={

@@ -1,415 +1,188 @@
 import express from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
-import { ApiResponse, User, Tenant } from '../types';
+import { config, getJwtSecret, hashOpaqueToken, randomId, randomOpaqueToken } from '../config';
+import { query, withTransaction } from '../db';
+import { AppError } from '../errors';
+import { requireAuth } from '../middleware/auth';
+import { checkOrigin, clearRefreshCookie, parseCookies, REFRESH_COOKIE, setRefreshCookie } from '../security/cookies';
+import { isUniqueViolation } from './helpers';
 
 const router = express.Router();
 
-// 模拟用户数据（实际项目中应该从数据库获取）
-const mockUsers: User[] = [
-  {
-    id: '1',
-    username: 'admin',
-    email: 'admin@xinglian-yunke.com',
-    password: '$2b$10$YZmNcvLG63wrYxf/j.ODY.7b9Rkey0ItlWzWvAOSN0mOfXFjDQp3i', // admin123（初始密码，首次登录后请修改）
-    role: 'admin',
-    tenantId: 'tenant-1',
-    status: 'active',
-    createdAt: new Date(),
-    updatedAt: new Date(),
-  },
-  {
-    id: '2',
-    username: 'operator',
-    email: 'operator@xinglian-yunke.com',
-    password: '$2b$10$/pRvtGq5lZ9291j/tfWSNO66R3nzXDafexjASfuvaajYryhEDIsy.', // operator123（初始密码，首次登录后请修改）
-    role: 'operator',
-    tenantId: 'tenant-1',
-    status: 'active',
-    createdAt: new Date(),
-    updatedAt: new Date(),
-  },
-];
+type UserRow = {
+  id: string;
+  tenant_id: string;
+  username: string;
+  email: string;
+  password_hash: string;
+  avatar: string | null;
+  role: 'admin' | 'operator' | 'viewer';
+  status: 'active' | 'inactive';
+  created_at: Date;
+  updated_at: Date;
+  tenant_name: string;
+  tenant_plan: 'basic' | 'pro' | 'enterprise';
+  tenant_status: 'active' | 'suspended' | 'expired';
+};
 
-const mockTenants: Tenant[] = [
-  {
-    id: 'tenant-1',
-    name: '星链云客系统 演示企业',
-    domain: 'demo.xinglian-yunke.com',
-    plan: 'pro',
-    status: 'active',
-    expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30天后
-    createdAt: new Date(),
-  },
-];
+function publicUser(row: UserRow) {
+  return {
+    id: row.id,
+    username: row.username,
+    email: row.email,
+    avatar: row.avatar || undefined,
+    role: row.role,
+    tenantId: row.tenant_id,
+    status: row.status,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
 
-// 用户登录
-// 模拟抖音OAuth授权回调
-router.get('/douyin/oauth/callback', async (req, res) => {
-  const { code, state } = req.query;
-  
-  // 模拟返回授权成功
-  res.json({
-    success: true,
-    message: '授权成功',
-    data: {
-      access_token: `mock_token_${Date.now()}`,
-      refresh_token: `mock_refresh_${Date.now()}`,
-      expires_in: 7200,
-      user_info: {
-        open_id: 'mock_open_123',
-        union_id: 'mock_union_123',
-        nickname: '测试抖音账号',
-        avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Douyin',
-      },
-    },
-  });
-});
+async function findUserByUsername(username: string): Promise<UserRow | undefined> {
+  const result = await query<UserRow>(
+    `SELECT u.*, t.name AS tenant_name, t.plan AS tenant_plan, t.status AS tenant_status
+       FROM users u JOIN tenants t ON t.id = u.tenant_id
+      WHERE lower(u.username) = lower($1) LIMIT 1`,
+    [username],
+  );
+  return result.rows[0];
+}
 
-router.post('/login', async (req, res) => {
+async function findUserById(userId: string): Promise<UserRow | undefined> {
+  const result = await query<UserRow>(
+    `SELECT u.*, t.name AS tenant_name, t.plan AS tenant_plan, t.status AS tenant_status
+       FROM users u JOIN tenants t ON t.id = u.tenant_id
+      WHERE u.id = $1 LIMIT 1`,
+    [userId],
+  );
+  return result.rows[0];
+}
+
+function signAccessToken(user: UserRow, sessionId: string): string {
+  return jwt.sign(
+    { userId: user.id, tenantId: user.tenant_id, role: user.role, sessionId, tokenType: 'access' },
+    getJwtSecret(),
+    { expiresIn: config.accessTokenTtl as jwt.SignOptions['expiresIn'], issuer: config.jwtIssuer, audience: config.jwtAudience, algorithm: 'HS256' },
+  );
+}
+
+async function createSession(user: UserRow): Promise<{ token: string; refreshToken: string }> {
+  const sessionId = randomId();
+  const refreshToken = randomOpaqueToken();
+  await query(
+    `INSERT INTO auth_sessions(id, user_id, tenant_id, refresh_token_hash, expires_at)
+     VALUES ($1, $2, $3, $4, NOW() + ($5 || ' days')::interval)`,
+    [sessionId, user.id, user.tenant_id, hashOpaqueToken(refreshToken), String(config.refreshTokenTtlDays)],
+  );
+  return { token: signAccessToken(user, sessionId), refreshToken };
+}
+
+function validateCredentials(username: unknown, password: unknown): asserts username is string {
+  if (typeof username !== 'string' || username.trim().length < 3 || typeof password !== 'string' || password.length < 8) {
+    throw new AppError(400, 'INVALID_CREDENTIALS', '用户名至少 3 个字符，密码至少 8 个字符');
+  }
+}
+
+router.post('/login', async (req, res, next) => {
   try {
-    const { username, password } = req.body;
-
-    if (!username || !password) {
-      return res.status(400).json({
-        success: false,
-        message: '用户名和密码不能为空',
-      } as ApiResponse);
-    }
-
-    // 查找用户
-    const user = mockUsers.find(u => u.username === username);
-    if (!user) {
-      return res.status(401).json({
-        success: false,
-        message: '用户名或密码错误',
-      } as ApiResponse);
-    }
-
-    // 验证密码
-    const isValidPassword = await bcrypt.compare(password, user.password);
-    if (!isValidPassword) {
-      return res.status(401).json({
-        success: false,
-        message: '用户名或密码错误',
-      } as ApiResponse);
-    }
-
-    // 检查用户状态
-    if (user.status !== 'active') {
-      return res.status(401).json({
-        success: false,
-        message: '账户已被禁用',
-      } as ApiResponse);
-    }
-
-    // 查找租户信息
-    const tenant = mockTenants.find(t => t.id === user.tenantId);
-    if (!tenant) {
-      return res.status(401).json({
-        success: false,
-        message: '租户信息不存在',
-      } as ApiResponse);
-    }
-
-    // 生成 JWT token
-    const token = jwt.sign(
-      {
-        userId: user.id,
-        username: user.username,
-        email: user.email,
-        role: user.role,
-        tenantId: user.tenantId,
-      },
-      process.env.JWT_SECRET || 'xinglian-yunke-secret-key',
-      { expiresIn: '7d' }
-    );
-
-    // 返回用户信息（不包含密码）
-    const { password: _, ...userWithoutPassword } = user;
-
-    return res.json({
-      success: true,
-      message: '登录成功',
-      data: {
-        token,
-        user: userWithoutPassword,
-        tenant: {
-          id: tenant.id,
-          name: tenant.name,
-          plan: tenant.plan,
-        },
-      },
-    } as ApiResponse);
+    validateCredentials(req.body?.username, req.body?.password);
+    const user = await findUserByUsername(req.body.username.trim());
+    if (!user || !(await bcrypt.compare(req.body.password, user.password_hash))) throw new AppError(401, 'INVALID_LOGIN', '用户名或密码错误');
+    if (user.status !== 'active' || user.tenant_status !== 'active') throw new AppError(403, 'ACCOUNT_DISABLED', '账户或企业已被禁用');
+    const session = await createSession(user);
+    setRefreshCookie(res, session.refreshToken);
+    res.json({ success: true, message: '登录成功', data: { token: session.token, user: publicUser(user), tenant: { id: user.tenant_id, name: user.tenant_name, plan: user.tenant_plan } } });
   } catch (error) {
-    console.error('登录错误:', error);
-    return res.status(500).json({
-      success: false,
-      message: '服务器内部错误',
-    } as ApiResponse);
+    next(error);
   }
 });
 
-// 用户注册
-router.post('/register', async (req, res) => {
+router.post('/register', async (req, res, next) => {
   try {
-    const { username, email, password, confirmPassword, tenantName } = req.body;
-
-    // 验证输入
-    if (!username || !email || !password || !confirmPassword) {
-      return res.status(400).json({
-        success: false,
-        message: '所有字段都是必填的',
-      } as ApiResponse);
-    }
-
-    if (password !== confirmPassword) {
-      return res.status(400).json({
-        success: false,
-        message: '两次输入的密码不一致',
-      } as ApiResponse);
-    }
-
-    if (password.length < 6) {
-      return res.status(400).json({
-        success: false,
-        message: '密码至少需要6个字符',
-      } as ApiResponse);
-    }
-
-    // 检查用户名是否已存在
-    const existingUser = mockUsers.find(u => u.username === username || u.email === email);
-    if (existingUser) {
-      return res.status(400).json({
-        success: false,
-        message: '用户名或邮箱已存在',
-      } as ApiResponse);
-    }
-
-    // 加密密码
-    const hashedPassword = await bcrypt.hash(password, 10);
-
-    // 创建新用户
-    const newUser: User = {
-      id: Date.now().toString(),
-      username,
-      email,
-      password: hashedPassword,
-      role: 'admin', // 注册用户默认为管理员
-      tenantId: `tenant-${Date.now()}`,
-      status: 'active',
-      createdAt: new Date(),
-      updatedAt: new Date(),
-    };
-
-    // 创建新租户
-    const newTenant: Tenant = {
-      id: newUser.tenantId,
-      name: tenantName || `${username}的企业`,
-      domain: `${username}.xinglian-yunke.com`,
-      plan: 'basic',
-      status: 'active',
-      expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30天试用
-      createdAt: new Date(),
-    };
-
-    // 添加到模拟数据（实际项目中应该保存到数据库）
-    mockUsers.push(newUser);
-    mockTenants.push(newTenant);
-
-    // 生成 JWT token
-    const token = jwt.sign(
-      {
-        userId: newUser.id,
-        username: newUser.username,
-        email: newUser.email,
-        role: newUser.role,
-        tenantId: newUser.tenantId,
-      },
-      process.env.JWT_SECRET || 'xinglian-yunke-secret-key',
-      { expiresIn: '7d' }
-    );
-
-    // 返回用户信息（不包含密码）
-    const { password: _, ...userWithoutPassword } = newUser;
-
-    return res.status(201).json({
-      success: true,
-      message: '注册成功',
-      data: {
-        token,
-        user: userWithoutPassword,
-        tenant: {
-          id: newTenant.id,
-          name: newTenant.name,
-          plan: newTenant.plan,
-        },
-      },
-    } as ApiResponse);
+    if (!config.allowSelfRegistration) throw new AppError(403, 'REGISTRATION_DISABLED', '当前环境未开放自助注册');
+    validateCredentials(req.body?.username, req.body?.password);
+    const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : '';
+    const tenantName = typeof req.body?.tenantName === 'string' ? req.body.tenantName.trim() : '';
+    if (!email || !tenantName || req.body.password !== req.body.confirmPassword) throw new AppError(400, 'INVALID_REGISTRATION', '企业名称、邮箱和两次一致的密码均为必填项');
+    const user = await withTransaction(async (client) => {
+      const tenantId = randomId();
+      const userId = randomId();
+      const passwordHash = await bcrypt.hash(req.body.password, 12);
+      await client.query(`INSERT INTO tenants(id, name, plan, expires_at) VALUES ($1, $2, 'basic', NOW() + INTERVAL '30 days')`, [tenantId, tenantName]);
+      await client.query(`INSERT INTO users(id, tenant_id, username, email, password_hash, role) VALUES ($1, $2, $3, $4, $5, 'admin')`, [userId, tenantId, req.body.username.trim(), email, passwordHash]);
+      const result = await client.query<UserRow>(`SELECT u.*, t.name AS tenant_name, t.plan AS tenant_plan, t.status AS tenant_status FROM users u JOIN tenants t ON t.id = u.tenant_id WHERE u.id = $1`, [userId]);
+      return result.rows[0];
+    });
+    const session = await createSession(user);
+    setRefreshCookie(res, session.refreshToken);
+    res.status(201).json({ success: true, message: '注册成功', data: { token: session.token, user: publicUser(user), tenant: { id: user.tenant_id, name: user.tenant_name, plan: user.tenant_plan } } });
   } catch (error) {
-    console.error('注册错误:', error);
-    return res.status(500).json({
-      success: false,
-      message: '服务器内部错误',
-    } as ApiResponse);
+    if (isUniqueViolation(error)) return next(new AppError(409, 'ACCOUNT_EXISTS', '用户名或邮箱已存在'));
+    next(error);
   }
 });
 
-// 获取当前用户信息
-router.get('/me', (req, res) => {
+router.get('/me', requireAuth, async (req, res, next) => {
   try {
-    // 从请求头获取 token
-    const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return res.status(401).json({
-        success: false,
-        message: '未提供认证令牌',
-      } as ApiResponse);
-    }
-
-    const token = authHeader.substring(7);
-    
-    // 验证 token
-    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'xinglian-yunke-secret-key') as any;
-    
-    // 查找用户
-    const user = mockUsers.find(u => u.id === decoded.userId);
-    if (!user) {
-      return res.status(401).json({
-        success: false,
-        message: '用户不存在',
-      } as ApiResponse);
-    }
-
-    // 返回用户信息（不包含密码）
-    const { password: _, ...userWithoutPassword } = user;
-
-    return res.json({
-      success: true,
-      message: '获取用户信息成功',
-      data: {
-        user: userWithoutPassword,
-      },
-    } as ApiResponse);
+    const user = await findUserById(req.auth!.userId);
+    if (!user) throw new AppError(401, 'USER_NOT_FOUND', '用户不存在');
+    res.json({ success: true, message: '获取用户信息成功', data: { user: publicUser(user) } });
   } catch (error) {
-    console.error('获取用户信息错误:', error);
-    return res.status(401).json({
-      success: false,
-      message: '认证令牌无效',
-    } as ApiResponse);
+    next(error);
   }
 });
 
-// 刷新 token
-router.post('/refresh', (req, res) => {
+router.post('/refresh', async (req, res, next) => {
   try {
-    const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return res.status(401).json({
-        success: false,
-        message: '未提供认证令牌',
-      } as ApiResponse);
-    }
-
-    const token = authHeader.substring(7);
-    
-    // 验证 token
-    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'xinglian-yunke-secret-key') as any;
-    
-    // 生成新的 token
-    const newToken = jwt.sign(
-      {
-        userId: decoded.userId,
-        username: decoded.username,
-        email: decoded.email,
-        role: decoded.role,
-        tenantId: decoded.tenantId,
-      },
-      process.env.JWT_SECRET || 'xinglian-yunke-secret-key',
-      { expiresIn: '7d' }
-    );
-
-    return res.json({
-      success: true,
-      message: 'Token 刷新成功',
-      data: {
-        token: newToken,
-      },
-    } as ApiResponse);
+    if (!checkOrigin(req.headers.origin)) throw new AppError(403, 'ORIGIN_FORBIDDEN', '请求来源不受信任');
+    const refreshToken = parseCookies(req.headers.cookie)[REFRESH_COOKIE];
+    if (!refreshToken) throw new AppError(401, 'REFRESH_REQUIRED', '刷新会话不存在');
+    const current = await query<{ id: string; user_id: string }>(`SELECT id, user_id FROM auth_sessions WHERE refresh_token_hash = $1 AND revoked_at IS NULL AND expires_at > NOW()`, [hashOpaqueToken(refreshToken)]);
+    const session = current.rows[0];
+    if (!session) throw new AppError(401, 'REFRESH_INVALID', '刷新会话无效或已过期');
+    const user = await findUserById(session.user_id);
+    if (!user || user.status !== 'active' || user.tenant_status !== 'active') throw new AppError(401, 'ACCOUNT_DISABLED', '账户不可用');
+    const nextSession = await withTransaction(async (client) => {
+      await client.query('UPDATE auth_sessions SET revoked_at = NOW() WHERE id = $1', [session.id]);
+      const nextId = randomId();
+      const nextRefresh = randomOpaqueToken();
+      await client.query(`INSERT INTO auth_sessions(id, user_id, tenant_id, refresh_token_hash, expires_at) VALUES ($1, $2, $3, $4, NOW() + ($5 || ' days')::interval)`, [nextId, user.id, user.tenant_id, hashOpaqueToken(nextRefresh), String(config.refreshTokenTtlDays)]);
+      return { token: signAccessToken(user, nextId), refreshToken: nextRefresh };
+    });
+    setRefreshCookie(res, nextSession.refreshToken);
+    res.json({ success: true, message: 'Token 刷新成功', data: { token: nextSession.token } });
   } catch (error) {
-    console.error('刷新 token 错误:', error);
-    return res.status(401).json({
-      success: false,
-      message: '认证令牌无效',
-    } as ApiResponse);
+    next(error);
   }
 });
 
-// 修改密码
-router.put('/password', async (req, res) => {
+router.post('/logout', requireAuth, async (req, res, next) => {
   try {
-    const { oldPassword, newPassword } = req.body;
-
-    if (!oldPassword || !newPassword) {
-      return res.status(400).json({
-        success: false,
-        message: '旧密码和新密码不能为空',
-      } as ApiResponse);
-    }
-
-    if (newPassword.length < 6) {
-      return res.status(400).json({
-        success: false,
-        message: '新密码至少需要6个字符',
-      } as ApiResponse);
-    }
-
-    // 从请求头获取 token
-    const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return res.status(401).json({
-        success: false,
-        message: '未提供认证令牌',
-      } as ApiResponse);
-    }
-
-    const token = authHeader.substring(7);
-    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'xinglian-yunke-secret-key') as any;
-    
-    // 查找用户
-    const user = mockUsers.find(u => u.id === decoded.userId);
-    if (!user) {
-      return res.status(401).json({
-        success: false,
-        message: '用户不存在',
-      } as ApiResponse);
-    }
-
-    // 验证旧密码
-    const isValid = await bcrypt.compare(oldPassword, user.password);
-    if (!isValid) {
-      return res.status(400).json({
-        success: false,
-        message: '旧密码错误',
-      } as ApiResponse);
-    }
-
-    // 加密新密码
-    const hashedPassword = await bcrypt.hash(newPassword, 10);
-    user.password = hashedPassword;
-    user.updatedAt = new Date();
-
-    return res.json({
-      success: true,
-      message: '密码修改成功',
-    } as ApiResponse);
+    await query('UPDATE auth_sessions SET revoked_at = COALESCE(revoked_at, NOW()) WHERE id = $1', [req.auth!.sessionId]);
+    clearRefreshCookie(res);
+    res.json({ success: true, message: '已退出登录', data: null });
   } catch (error) {
-    console.error('修改密码错误:', error);
-    return res.status(500).json({
-      success: false,
-      message: '服务器内部错误',
-    } as ApiResponse);
+    next(error);
   }
 });
 
-module.exports = router;
+router.put('/password', requireAuth, async (req, res, next) => {
+  try {
+    if (typeof req.body?.oldPassword !== 'string' || typeof req.body?.newPassword !== 'string' || req.body.newPassword.length < 8) throw new AppError(400, 'INVALID_PASSWORD', '新密码至少需要 8 个字符');
+    const user = await findUserById(req.auth!.userId);
+    if (!user || !(await bcrypt.compare(req.body.oldPassword, user.password_hash))) throw new AppError(400, 'PASSWORD_MISMATCH', '旧密码错误');
+    const passwordHash = await bcrypt.hash(req.body.newPassword, 12);
+    await withTransaction(async (client) => {
+      await client.query('UPDATE users SET password_hash = $1, password_changed_at = NOW(), updated_at = NOW() WHERE id = $2', [passwordHash, user.id]);
+      await client.query('UPDATE auth_sessions SET revoked_at = NOW() WHERE user_id = $1', [user.id]);
+    });
+    clearRefreshCookie(res);
+    res.json({ success: true, message: '密码修改成功，请重新登录', data: null });
+  } catch (error) {
+    next(error);
+  }
+});
+
+export default router;

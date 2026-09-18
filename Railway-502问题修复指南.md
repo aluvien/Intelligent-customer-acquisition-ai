@@ -39,8 +39,8 @@ WS_BASE=https://linkbot-ai-production.up.railway.app/ws    # WebSocket 地址
 **需要在 Railway 后端服务中配置的环境变量：**
 ```
 PORT=8080
-DOUYIN_APP_ID=aw6hj204nms0vumu
-DOUYIN_APP_SECRET=b46cd587e094aae751e45380f9c0e72d
+DOUYIN_APP_ID=REVOKED_DOUYIN_APP_ID
+DOUYIN_APP_SECRET=REVOKED_DOUYIN_APP_SECRET
 REDIRECT_URI=https://linkbot-ai-production.up.railway.app/oauth/callback
 ```
 
@@ -73,8 +73,8 @@ REDIRECT_URI=https://linkbot-ai-production.up.railway.app/oauth/callback
 - [ ] **Settings → Variables**：
   ```
   PORT=8080
-  DOUYIN_APP_ID=aw6hj204nms0vumu
-  DOUYIN_APP_SECRET=b46cd587e094aae751e45380f9c0e72d
+  DOUYIN_APP_ID=REVOKED_DOUYIN_APP_ID
+  DOUYIN_APP_SECRET=REVOKED_DOUYIN_APP_SECRET
   REDIRECT_URI=https://linkbot-ai-production.up.railway.app/oauth/callback
   ```
 
@@ -127,8 +127,8 @@ cd /Users/yiche/linkbot-ai
 docker build -t linkbot-backend .
 docker run -p 8080:8080 \
   -e PORT=8080 \
-  -e DOUYIN_APP_ID=aw6hj204nms0vumu \
-  -e DOUYIN_APP_SECRET=b46cd587e094aae751e45380f9c0e72d \
+  -e DOUYIN_APP_ID=REVOKED_DOUYIN_APP_ID \
+  -e DOUYIN_APP_SECRET=REVOKED_DOUYIN_APP_SECRET \
   linkbot-backend
 ```
 

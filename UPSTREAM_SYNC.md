@@ -83,13 +83,12 @@ git show -s --format="%H %ad %s" --date=iso HEAD
 # 然后更新本文档第 2 节的 HEAD / 时间 / 提交数
 ```
 
-## 5. 本地启动测试速查
+## 5. 当前本地启动测试速查
 
-- 后端（3001）：`cd backend && npm start`（已构建 `dist/`），健康检查 `curl http://localhost:3001/health`
-- 前端（3000）：`cd frontend && npm start`，访问 `http://localhost:3000/login`（账号 `admin/admin123`）
-- Go 代理（8080）：本机无 Go 工具链，用预编译二进制 `./live-im-proxy`，`PORT=8080 ./live-im-proxy`，检查 `curl http://localhost:8080/health` 和 `curl http://localhost:8080/`
-- 全栈：`docker-compose up -d`（需 Docker，含 postgres/redis/nocobase/backend/frontend/proxy/nginx）
-- 注意：`start.sh` / `start-all.sh` 内写死了旧路径（`../linkbot-ai-frontend`、` /Users/yiche/linkbot-ai`），本机直接跑会失败，建议按第 5 节手动逐个起。
+- 完整服务：先复制并填写 `.env.template` 为 `.env`，执行 `./start.sh`；详细说明以 `README.md` 为准。
+- 后端检查：`curl http://localhost:3000/health`（生产入口）或本地开发时 `curl http://localhost:3001/health`。
+- 前端入口：`http://localhost:3000/login`；管理员必须使用 `npm run init-admin` 通过环境变量初始化，不再提供默认账号密码。
+- Go 平台适配器：T7/T8 核验通过前默认不启用，只返回明确的未核验状态。
 
 ## 6. 同源性验证结论（2026-09-16，未确认）
 

@@ -27,7 +27,7 @@
 
 ```bash
 curl -X GET "https://api.coze.com/open/v1/bots" \
-  -H "Authorization: Bearer pat_jEyz7XHI2Ss3Q5UCmeDEYPcPS5xeMJnK7oFvUjSxMy92hcVKnO4hnyjI4hbGcSbA"
+  -H "Authorization: Bearer REVOKED_COZE_TOKEN"
 ```
 
 这会返回您所有的 Bot 列表，每个 Bot 都有 `id` 字段。
@@ -58,7 +58,7 @@ echo "COZE_BOT_ID=你的Bot_ID" >> .env
 
 ```bash
 curl -X POST "https://api.coze.com/open/v1/bot/chat" \
-  -H "Authorization: Bearer pat_jEyz7XHI2Ss3Q5UCmeDEYPcPS5xeMJnK7oFvUjSxMy92hcVKnO4hnyjI4hbGcSbA" \
+  -H "Authorization: Bearer REVOKED_COZE_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
     "bot_id": "你的Bot_ID",

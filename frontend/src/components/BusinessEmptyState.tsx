@@ -60,7 +60,7 @@ const BusinessEmptyState: React.FC<BusinessEmptyStateProps> = ({
             {primaryActionText}
           </Button>
         )}
-        <Button>查看产品手册</Button>
+        <Button disabled>产品手册未接入</Button>
       </Space>
     </div>
   );

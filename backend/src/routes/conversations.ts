@@ -1,305 +1,202 @@
 import express from 'express';
-import { ApiResponse, Conversation, Message } from '../types';
+import { query, withTransaction } from '../db';
+import { randomId } from '../config';
+import { AppError } from '../errors';
+import { broadcast } from '../realtime/hub';
+import { enqueueJob } from '../jobs/worker';
+import { optionalText, pageParams, requireText, tenantId } from './helpers';
+import { requireRole } from '../middleware/auth';
 
 const router = express.Router();
 
-// 模拟对话数据
-const mockConversations: Conversation[] = [
-  {
-    id: '1',
-    tenantId: 'tenant-1',
-    channelId: '1',
-    userId: 'user_123',
-    userNickname: '张小明',
-    userAvatar: 'https://example.com/avatar1.jpg',
-    status: 'active',
-    lastMessageAt: new Date(),
-    messageCount: 5,
-    score: 8,
-    tags: ['高意向', '价格咨询'],
-    createdAt: new Date(),
-  },
-  {
-    id: '2',
-    tenantId: 'tenant-1',
-    channelId: '1',
-    userId: 'user_456',
-    userNickname: '李小红',
-    userAvatar: 'https://example.com/avatar2.jpg',
-    status: 'closed',
-    lastMessageAt: new Date(Date.now() - 1000 * 60 * 30), // 30分钟前
-    messageCount: 3,
-    score: 6,
-    tags: ['一般意向'],
-    createdAt: new Date(),
-  },
-];
+type ConversationRow = {
+  id: string;
+  channel_id: string | null;
+  widget_id: string | null;
+  visitor_session_id: string | null;
+  external_user_id: string;
+  user_nickname: string;
+  user_avatar: string | null;
+  status: 'active' | 'closed' | 'transferred';
+  mode: 'human' | 'ai_draft' | 'auto';
+  mode_version: number;
+  assigned_to: string | null;
+  last_message_at: Date;
+  message_count: number;
+  score: number;
+  tags: string[];
+  created_at: Date;
+  latest_content: string | null;
+  latest_direction: 'inbound' | 'outbound' | null;
+};
 
-const mockMessages: Message[] = [
-  {
-    id: '1',
-    tenantId: 'tenant-1',
-    conversationId: '1',
-    type: 'user',
-    content: '请问这个产品怎么购买？',
-    timestamp: new Date(Date.now() - 1000 * 60 * 5),
-  },
-  {
-    id: '2',
-    tenantId: 'tenant-1',
-    conversationId: '1',
-    type: 'bot',
-    content: '您好！欢迎咨询我们的产品。请告诉我您的具体需求，我会为您详细介绍。',
-    timestamp: new Date(Date.now() - 1000 * 60 * 4),
-  },
-  {
-    id: '3',
-    tenantId: 'tenant-1',
-    conversationId: '1',
-    type: 'user',
-    content: '价格是多少？',
-    timestamp: new Date(Date.now() - 1000 * 60 * 3),
-  },
-  {
-    id: '4',
-    tenantId: 'tenant-1',
-    conversationId: '1',
-    type: 'bot',
-    content: '我们的产品价格根据配置不同，从299元到1999元不等。您需要哪种配置呢？',
-    timestamp: new Date(Date.now() - 1000 * 60 * 2),
-  },
-  {
-    id: '5',
-    tenantId: 'tenant-1',
-    conversationId: '1',
-    type: 'user',
-    content: '我想了解一下1999元的配置',
-    timestamp: new Date(Date.now() - 1000 * 60 * 1),
-  },
-];
+function mapConversation(row: ConversationRow) {
+  return {
+    id: row.id,
+    channelId: row.channel_id,
+    widgetId: row.widget_id,
+    userId: row.external_user_id,
+    userNickname: row.user_nickname,
+    userAvatar: row.user_avatar || undefined,
+    status: row.status,
+    mode: row.mode,
+    modeVersion: row.mode_version,
+    assignedTo: row.assigned_to,
+    lastMessageAt: row.last_message_at,
+    messageCount: row.message_count,
+    score: Number(row.score || 0),
+    tags: row.tags || [],
+    latestMessage: row.latest_content ? { content: row.latest_content, direction: row.latest_direction } : null,
+    createdAt: row.created_at,
+  };
+}
 
-// 获取对话列表
-router.get('/', (req, res) => {
+async function getConversation(id: string, tenant: string): Promise<ConversationRow> {
+  const result = await query<ConversationRow>(
+    `SELECT c.id, c.channel_account_id AS channel_id, c.widget_id, c.visitor_session_id,
+            c.external_user_id, c.user_nickname, c.user_avatar, c.status, c.mode,
+            c.mode_version, c.assigned_to, c.last_message_at, c.message_count,
+            c.score, c.tags, c.created_at,
+            lm.content AS latest_content, lm.direction AS latest_direction
+       FROM conversations c
+       LEFT JOIN LATERAL (
+         SELECT content, direction FROM messages WHERE conversation_id = c.id ORDER BY created_at DESC LIMIT 1
+       ) lm ON TRUE
+      WHERE c.id = $1 AND c.tenant_id = $2`,
+    [id, tenant],
+  );
+  if (!result.rows[0]) throw new AppError(404, 'CONVERSATION_NOT_FOUND', '对话不存在');
+  return result.rows[0];
+}
+
+router.get('/', async (req, res, next) => {
   try {
-    const { page = 1, limit = 10, status, channelId, score } = req.query;
-    
-    let filteredConversations = mockConversations;
-    
-    if (status) {
-      filteredConversations = filteredConversations.filter(c => c.status === status);
-    }
-    
-    if (channelId) {
-      filteredConversations = filteredConversations.filter(c => c.channelId === channelId);
-    }
-    
-    if (score) {
-      const scoreNum = Number(score);
-      filteredConversations = filteredConversations.filter(c => c.score >= scoreNum);
-    }
-    
-    const start = (Number(page) - 1) * Number(limit);
-    const end = start + Number(limit);
-    const paginatedConversations = filteredConversations.slice(start, end);
-    
-    return res.json({
-      success: true,
-      message: '获取对话列表成功',
-      data: {
-        conversations: paginatedConversations,
-        pagination: {
-          page: Number(page),
-          limit: Number(limit),
-          total: filteredConversations.length,
-          totalPages: Math.ceil(filteredConversations.length / Number(limit)),
-        },
-      },
-    } as ApiResponse);
-  } catch (error) {
-    console.error('获取对话列表错误:', error);
-    return res.status(500).json({
-      success: false,
-      message: '服务器内部错误',
-    } as ApiResponse);
-  }
+    const tenant = tenantId(req);
+    const { page, limit, offset } = pageParams(req);
+    const status = typeof req.query.status === 'string' && req.query.status !== 'all' ? req.query.status : undefined;
+    const search = typeof req.query.search === 'string' ? req.query.search.trim() : '';
+    const values: unknown[] = [tenant];
+    const filters = ['c.tenant_id = $1'];
+    if (status) { values.push(status); filters.push(`c.status = $${values.length}`); }
+    if (search) { values.push(`%${search}%`); filters.push(`(c.user_nickname ILIKE $${values.length} OR c.external_user_id ILIKE $${values.length})`); }
+    const count = await query<{ count: string }>(`SELECT COUNT(*)::text AS count FROM conversations c WHERE ${filters.join(' AND ')}`, values);
+    values.push(limit, offset);
+    const result = await query<ConversationRow>(
+      `SELECT c.id, c.channel_account_id AS channel_id, c.widget_id, c.visitor_session_id,
+              c.external_user_id, c.user_nickname, c.user_avatar, c.status, c.mode,
+              c.mode_version, c.assigned_to, c.last_message_at, c.message_count,
+              c.score, c.tags, c.created_at, lm.content AS latest_content, lm.direction AS latest_direction
+         FROM conversations c
+         LEFT JOIN LATERAL (SELECT content, direction FROM messages WHERE conversation_id = c.id ORDER BY created_at DESC LIMIT 1) lm ON TRUE
+        WHERE ${filters.join(' AND ')} ORDER BY c.last_message_at DESC LIMIT $${values.length - 1} OFFSET $${values.length}`,
+      values,
+    );
+    const total = Number(count.rows[0]?.count || 0);
+    res.json({ success: true, message: '获取对话列表成功', data: { conversations: result.rows.map(mapConversation), pagination: { page, limit, total, totalPages: Math.ceil(total / limit) } } });
+  } catch (error) { next(error); }
 });
 
-// 获取对话详情
-router.get('/:id', (req, res) => {
-  try {
-    const { id } = req.params;
-    const conversation = mockConversations.find(c => c.id === id);
-    
-    if (!conversation) {
-      return res.status(404).json({
-        success: false,
-        message: '对话不存在',
-      } as ApiResponse);
-    }
-    
-    return res.json({
-      success: true,
-      message: '获取对话详情成功',
-      data: { conversation },
-    } as ApiResponse);
-  } catch (error) {
-    console.error('获取对话详情错误:', error);
-    return res.status(500).json({
-      success: false,
-      message: '服务器内部错误',
-    } as ApiResponse);
-  }
+router.get('/:id', async (req, res, next) => {
+  try { res.json({ success: true, message: '获取对话成功', data: { conversation: mapConversation(await getConversation(req.params.id, tenantId(req))) } }); }
+  catch (error) { next(error); }
 });
 
-// 获取对话消息
-router.get('/:id/messages', (req, res) => {
+router.get('/:id/messages', async (req, res, next) => {
   try {
-    const { id } = req.params;
-    const { page = 1, limit = 50 } = req.query;
-    
-    const conversation = mockConversations.find(c => c.id === id);
-    if (!conversation) {
-      return res.status(404).json({
-        success: false,
-        message: '对话不存在',
-      } as ApiResponse);
-    }
-    
-    const conversationMessages = mockMessages.filter(m => m.conversationId === id);
-    
-    const start = (Number(page) - 1) * Number(limit);
-    const end = start + Number(limit);
-    const paginatedMessages = conversationMessages.slice(start, end);
-    
-    return res.json({
-      success: true,
-      message: '获取消息列表成功',
-      data: {
-        messages: paginatedMessages,
-        pagination: {
-          page: Number(page),
-          limit: Number(limit),
-          total: conversationMessages.length,
-          totalPages: Math.ceil(conversationMessages.length / Number(limit)),
-        },
-      },
-    } as ApiResponse);
-  } catch (error) {
-    console.error('获取消息列表错误:', error);
-    return res.status(500).json({
-      success: false,
-      message: '服务器内部错误',
-    } as ApiResponse);
-  }
+    const tenant = tenantId(req);
+    await getConversation(req.params.id, tenant);
+    const result = await query(`SELECT id, conversation_id AS "conversationId", direction, sender_type AS "senderType", message_type AS "messageType", content, delivery_status AS "deliveryStatus", metadata, created_at AS "createdAt" FROM messages WHERE conversation_id = $1 AND tenant_id = $2 ORDER BY created_at ASC LIMIT 500`, [req.params.id, tenant]);
+    res.json({ success: true, message: '获取消息记录成功', data: { messages: result.rows } });
+  } catch (error) { next(error); }
 });
 
-// 发送消息
-router.post('/:id/messages', (req, res) => {
+router.post('/:id/messages', requireRole('admin', 'operator'), async (req, res, next) => {
   try {
-    const { id } = req.params;
-    const { content, type = 'human' } = req.body;
-    
-    const conversation = mockConversations.find(c => c.id === id);
-    if (!conversation) {
-      return res.status(404).json({
-        success: false,
-        message: '对话不存在',
-      } as ApiResponse);
-    }
-    
-    const newMessage: Message = {
-      id: Date.now().toString(),
-      tenantId: conversation.tenantId,
-      conversationId: id,
-      type: type as 'user' | 'bot' | 'human',
-      content,
-      timestamp: new Date(),
-    };
-    
-    mockMessages.push(newMessage);
-    
-    // 更新对话的最后消息时间
-    conversation.lastMessageAt = new Date();
-    conversation.messageCount += 1;
-    
-    return res.status(201).json({
-      success: true,
-      message: '发送消息成功',
-      data: { message: newMessage },
-    } as ApiResponse);
-  } catch (error) {
-    console.error('发送消息错误:', error);
-    return res.status(500).json({
-      success: false,
-      message: '服务器内部错误',
-    } as ApiResponse);
-  }
+    const tenant = tenantId(req);
+    const content = requireText(req.body?.content, '消息内容', 4000);
+    const conversation = await getConversation(req.params.id, tenant);
+    if (conversation.status === 'closed') throw new AppError(409, 'CONVERSATION_CLOSED', '对话已关闭');
+    const messageId = randomId();
+    await withTransaction(async (client) => {
+      await client.query(`INSERT INTO messages(id, tenant_id, conversation_id, direction, sender_type, message_type, content, delivery_status, metadata) VALUES ($1, $2, $3, 'outbound', 'human', 'web_message', $4, 'queued', $5::jsonb)`, [messageId, tenant, conversation.id, content, JSON.stringify({ userId: req.auth!.userId })]);
+      await client.query(`UPDATE conversations SET last_message_at = NOW(), message_count = message_count + 1, updated_at = NOW() WHERE id = $1 AND tenant_id = $2`, [conversation.id, tenant]);
+    });
+    await enqueueJob(tenant, conversation.widget_id ? 'web_delivery' : 'platform_delivery', { conversationId: conversation.id, messageId }, conversation.widget_id ? 3 : 1);
+    broadcast(tenant, { type: 'message', data: { id: messageId, conversationId: conversation.id, direction: 'outbound', senderType: 'human', content, deliveryStatus: 'queued' }, timestamp: new Date().toISOString() });
+    res.status(201).json({ success: true, message: '回复已进入发送队列', data: { messageId, deliveryStatus: 'queued' } });
+  } catch (error) { next(error); }
 });
 
-// 关闭对话
-router.put('/:id/close', (req, res) => {
+router.post('/:id/drafts/:aiRunId/approve', requireRole('admin', 'operator'), async (req, res, next) => {
   try {
-    const { id } = req.params;
-    const conversation = mockConversations.find(c => c.id === id);
-    
-    if (!conversation) {
-      return res.status(404).json({
-        success: false,
-        message: '对话不存在',
-      } as ApiResponse);
-    }
-    
-    conversation.status = 'closed';
-    
-    return res.json({
-      success: true,
-      message: '关闭对话成功',
-      data: { conversation },
-    } as ApiResponse);
-  } catch (error) {
-    console.error('关闭对话错误:', error);
-    return res.status(500).json({
-      success: false,
-      message: '服务器内部错误',
-    } as ApiResponse);
-  }
+    const tenant = tenantId(req);
+    const content = optionalText(req.body?.content, 4000);
+    const result = await withTransaction(async (client) => {
+      const run = await client.query<{ draft: string | null; status: string }>(`SELECT draft, status FROM ai_runs WHERE id = $1 AND tenant_id = $2 AND conversation_id = $3 FOR UPDATE`, [req.params.aiRunId, tenant, req.params.id]);
+      if (!run.rows[0] || run.rows[0].status !== 'succeeded' || !(content || run.rows[0].draft)) throw new AppError(409, 'DRAFT_NOT_READY', 'AI 草稿尚未准备好或已失效');
+      const conversation = await client.query<{ status: string; mode: string }>('SELECT status, mode FROM conversations WHERE id = $1 AND tenant_id = $2 FOR UPDATE', [req.params.id, tenant]);
+      if (!conversation.rows[0] || conversation.rows[0].status === 'closed') throw new AppError(409, 'CONVERSATION_CLOSED', '对话已关闭');
+      const messageId = randomId();
+      const text = content || run.rows[0].draft!;
+      await client.query(`INSERT INTO messages(id, tenant_id, conversation_id, direction, sender_type, message_type, content, delivery_status, metadata) VALUES ($1, $2, $3, 'outbound', 'human', 'web_message', $4, 'queued', $5::jsonb)`, [messageId, tenant, req.params.id, text, JSON.stringify({ approvedAiRunId: req.params.aiRunId, userId: req.auth!.userId })]);
+      await client.query(`UPDATE conversations SET last_message_at = NOW(), message_count = message_count + 1, updated_at = NOW() WHERE id = $1`, [req.params.id]);
+      return { messageId, text };
+    });
+    const conversation = await getConversation(req.params.id, tenant);
+    await enqueueJob(tenant, conversation.widget_id ? 'web_delivery' : 'platform_delivery', { conversationId: req.params.id, messageId: result.messageId }, conversation.widget_id ? 3 : 1);
+    broadcast(tenant, { type: 'message', data: { id: result.messageId, conversationId: req.params.id, direction: 'outbound', senderType: 'human', content: result.text, deliveryStatus: 'queued' }, timestamp: new Date().toISOString() });
+    res.status(201).json({ success: true, message: '草稿已人工批准并进入发送队列', data: { messageId: result.messageId, deliveryStatus: 'queued' } });
+  } catch (error) { next(error); }
 });
 
-// 更新对话评分
-router.put('/:id/score', (req, res) => {
+router.put('/:id/close', requireRole('admin', 'operator'), async (req, res, next) => {
   try {
-    const { id } = req.params;
-    const { score } = req.body;
-    
-    if (score < 0 || score > 10) {
-      return res.status(400).json({
-        success: false,
-        message: '评分必须在0-10之间',
-      } as ApiResponse);
-    }
-    
-    const conversation = mockConversations.find(c => c.id === id);
-    if (!conversation) {
-      return res.status(404).json({
-        success: false,
-        message: '对话不存在',
-      } as ApiResponse);
-    }
-    
-    conversation.score = score;
-    
-    return res.json({
-      success: true,
-      message: '更新评分成功',
-      data: { conversation },
-    } as ApiResponse);
-  } catch (error) {
-    console.error('更新评分错误:', error);
-    return res.status(500).json({
-      success: false,
-      message: '服务器内部错误',
-    } as ApiResponse);
-  }
+    const tenant = tenantId(req);
+    await getConversation(req.params.id, tenant);
+    const result = await query(`UPDATE conversations SET status = 'closed', updated_at = NOW() WHERE id = $1 AND tenant_id = $2 RETURNING id, status`, [req.params.id, tenant]);
+    res.json({ success: true, message: '对话已关闭', data: { conversation: result.rows[0] } });
+  } catch (error) { next(error); }
 });
 
-module.exports = router;
+router.put('/:id/score', requireRole('admin', 'operator'), async (req, res, next) => {
+  try {
+    const score = Number(req.body?.score);
+    if (!Number.isFinite(score) || score < 0 || score > 10) throw new AppError(400, 'INVALID_SCORE', '评分必须在 0 到 10 之间');
+    const result = await query(`UPDATE conversations SET score = $1, updated_at = NOW() WHERE id = $2 AND tenant_id = $3 RETURNING id, score`, [score, req.params.id, tenantId(req)]);
+    if (!result.rowCount) throw new AppError(404, 'CONVERSATION_NOT_FOUND', '对话不存在');
+    res.json({ success: true, message: '评分已保存', data: { conversation: result.rows[0] } });
+  } catch (error) { next(error); }
+});
+
+router.put('/:id/mode', requireRole('admin', 'operator'), async (req, res, next) => {
+  try {
+    const mode = req.body?.mode;
+    if (!['human', 'ai_draft', 'auto'].includes(mode)) throw new AppError(400, 'INVALID_MODE', '会话模式无效');
+    if (mode === 'auto' && req.auth!.role !== 'admin') throw new AppError(403, 'AUTO_MODE_FORBIDDEN', '只有管理员可以开启自动模式');
+    if (mode === 'auto') {
+      const knowledge = await query<{ count: string }>(`SELECT COUNT(*)::text AS count FROM knowledge_documents WHERE tenant_id = $1 AND status = 'published'`, [tenantId(req)]);
+      if (Number(knowledge.rows[0]?.count || 0) === 0) throw new AppError(409, 'AUTO_MODE_REQUIRES_KNOWLEDGE', '发布企业知识后才能开启自动模式');
+      const conversation = await getConversation(req.params.id, tenantId(req));
+      if (!conversation.widget_id) throw new AppError(409, 'AUTO_MODE_PLATFORM_UNVERIFIED', '未核验的平台渠道不能开启自动发送');
+    }
+    const result = await query(`UPDATE conversations SET mode = $1, mode_version = mode_version + 1, updated_at = NOW() WHERE id = $2 AND tenant_id = $3 RETURNING id, mode, mode_version`, [mode, req.params.id, tenantId(req)]);
+    if (!result.rowCount) throw new AppError(404, 'CONVERSATION_NOT_FOUND', '对话不存在');
+    await query(`INSERT INTO audit_logs(id, tenant_id, user_id, action, resource_type, resource_id, metadata) VALUES ($1, $2, $3, 'conversation_mode_changed', 'conversation', $4, $5::jsonb)`, [randomId(), tenantId(req), req.auth!.userId, req.params.id, JSON.stringify({ mode })]);
+    res.json({ success: true, message: '会话模式已更新', data: { conversation: result.rows[0] } });
+  } catch (error) { next(error); }
+});
+
+router.put('/:id/assign', requireRole('admin', 'operator'), async (req, res, next) => {
+  try {
+    const assignedTo = typeof req.body?.assignedTo === 'string' ? req.body.assignedTo : null;
+    if (assignedTo) {
+      const user = await query('SELECT id FROM users WHERE id = $1 AND tenant_id = $2 AND status = \'active\'', [assignedTo, tenantId(req)]);
+      if (!user.rowCount) throw new AppError(400, 'INVALID_ASSIGNEE', '负责人不存在或已停用');
+    }
+    const result = await query(`UPDATE conversations SET assigned_to = $1, status = CASE WHEN $1 IS NULL THEN status ELSE 'transferred' END, updated_at = NOW() WHERE id = $2 AND tenant_id = $3 RETURNING id, assigned_to AS "assignedTo", status`, [assignedTo, req.params.id, tenantId(req)]);
+    if (!result.rowCount) throw new AppError(404, 'CONVERSATION_NOT_FOUND', '对话不存在');
+    res.json({ success: true, message: '负责人已更新', data: { conversation: result.rows[0] } });
+  } catch (error) { next(error); }
+});
+
+export default router;

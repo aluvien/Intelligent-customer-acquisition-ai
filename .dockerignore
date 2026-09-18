@@ -1,0 +1,8 @@
+.git
+.env*
+node_modules
+dist
+build
+logs
+*.log
+docs/rebuild
