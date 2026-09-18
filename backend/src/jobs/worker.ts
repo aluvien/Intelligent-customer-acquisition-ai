@@ -135,37 +135,39 @@ async function fail(job: Job, error: unknown): Promise<void> {
   const deterministicBlocked = job.type === 'ai_draft' && error instanceof AppError && ['AI_NOT_CONFIGURED', 'AI_PROVIDER_UNSUPPORTED', 'AI_KNOWLEDGE_REQUIRED', 'AI_KNOWLEDGE_SNAPSHOT_INVALID', 'AI_PROVIDER_CREATION_UNKNOWN', 'CONTENT_BLOCKED'].includes(error.code);
   const terminal = job.attempts >= job.max_attempts || deterministicBlocked;
   const delaySeconds = Math.min(300, 2 ** Math.max(0, job.attempts - 1) * 5);
-  if (job.type === 'ai_draft') {
-    const aiRunId = typeof job.payload.aiRunId === 'string' ? job.payload.aiRunId : '';
-    if (aiRunId) {
-      const runStatus = deterministicBlocked ? 'blocked' : terminal ? 'failed' : 'queued';
-      await query(
-        `UPDATE ai_runs
-            SET status = $2, error = $3,
-                completed_at = CASE WHEN $2 IN ('blocked', 'failed') THEN NOW() ELSE NULL END
-          WHERE id = $1 AND tenant_id = $4 AND EXISTS (SELECT 1 FROM jobs WHERE id = $5 AND status = 'running' AND locked_by = $6)`,
-        [aiRunId, runStatus, message, job.tenant_id, job.id, WORKER_ID],
-      );
+  await withTransaction(async (client) => {
+    if (job.type === 'ai_draft') {
+      const aiRunId = typeof job.payload.aiRunId === 'string' ? job.payload.aiRunId : '';
+      if (aiRunId) {
+        const runStatus = deterministicBlocked ? 'blocked' : terminal ? 'failed' : 'queued';
+        await client.query(
+          `UPDATE ai_runs
+              SET status = $2, error = $3,
+                  completed_at = CASE WHEN $2 IN ('blocked', 'failed') THEN NOW() ELSE NULL END
+            WHERE id = $1 AND tenant_id = $4 AND EXISTS (SELECT 1 FROM jobs WHERE id = $5 AND status = 'running' AND locked_by = $6)`,
+          [aiRunId, runStatus, message, job.tenant_id, job.id, WORKER_ID],
+        );
+      }
     }
-  }
-  if (job.type === 'platform_delivery') {
-    const messageId = typeof job.payload.messageId === 'string' ? job.payload.messageId : '';
-    if (messageId) await query(`UPDATE messages SET delivery_status = CASE WHEN $3 = 'PLATFORM_UNVERIFIED' THEN 'failed' ELSE 'unknown' END WHERE id = $1 AND tenant_id = $2 AND delivery_status IN ('queued', 'sending') AND EXISTS (SELECT 1 FROM jobs WHERE id = $4 AND status = 'running' AND locked_by = $5)`, [messageId, job.tenant_id, error instanceof AppError ? error.code : 'UNKNOWN', job.id, WORKER_ID]);
-  }
-  if (job.type === 'web_delivery' && terminal) {
-    const messageId = typeof job.payload.messageId === 'string' ? job.payload.messageId : '';
-    if (messageId && !(error instanceof AppError && error.code === 'WEB_DELIVERY_RECONCILIATION_REQUIRED')) {
-      await query(`UPDATE messages SET delivery_status = 'failed' WHERE id = $1 AND tenant_id = $2 AND delivery_status IN ('queued', 'sending') AND EXISTS (SELECT 1 FROM jobs WHERE id = $3 AND status = 'running' AND locked_by = $4)`, [messageId, job.tenant_id, job.id, WORKER_ID]);
+    if (job.type === 'platform_delivery') {
+      const messageId = typeof job.payload.messageId === 'string' ? job.payload.messageId : '';
+      if (messageId) await client.query(`UPDATE messages SET delivery_status = CASE WHEN $3 = 'PLATFORM_UNVERIFIED' THEN 'failed' ELSE 'unknown' END WHERE id = $1 AND tenant_id = $2 AND delivery_status IN ('queued', 'sending') AND EXISTS (SELECT 1 FROM jobs WHERE id = $4 AND status = 'running' AND locked_by = $5)`, [messageId, job.tenant_id, error instanceof AppError ? error.code : 'UNKNOWN', job.id, WORKER_ID]);
     }
-  }
-  await query(
-    `UPDATE jobs
-        SET status = $3,
-            run_after = NOW() + ($4 || ' seconds')::interval,
-            locked_at = NULL, locked_by = NULL, last_error = $2, updated_at = NOW()
-      WHERE id = $1 AND locked_by = $5`,
-    [job.id, message, terminal ? 'dead' : 'queued', String(delaySeconds), WORKER_ID],
-  );
+    if (job.type === 'web_delivery' && terminal) {
+      const messageId = typeof job.payload.messageId === 'string' ? job.payload.messageId : '';
+      if (messageId && !(error instanceof AppError && error.code === 'WEB_DELIVERY_RECONCILIATION_REQUIRED')) {
+        await client.query(`UPDATE messages SET delivery_status = 'failed' WHERE id = $1 AND tenant_id = $2 AND delivery_status IN ('queued', 'sending') AND EXISTS (SELECT 1 FROM jobs WHERE id = $3 AND status = 'running' AND locked_by = $4)`, [messageId, job.tenant_id, job.id, WORKER_ID]);
+      }
+    }
+    await client.query(
+      `UPDATE jobs
+          SET status = $3,
+              run_after = NOW() + ($4 || ' seconds')::interval,
+              locked_at = NULL, locked_by = NULL, last_error = $2, updated_at = NOW()
+        WHERE id = $1 AND locked_by = $5`,
+      [job.id, message, terminal ? 'dead' : 'queued', String(delaySeconds), WORKER_ID],
+    );
+  });
 }
 
 async function processWebDelivery(job: Job): Promise<void> {
