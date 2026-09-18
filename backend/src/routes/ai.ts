@@ -108,8 +108,11 @@ router.post('/draft', requireRole('admin', 'operator'), async (req, res, next) =
       await insertJob(client, tenant, 'ai_draft', { conversationId, messageId, aiRunId, modeVersion: conversation.rows[0].mode_version });
       return { aiRunId, status: 'queued', duplicate: false };
     });
-    const statusCode = result.status === 'blocked' ? 429 : result.duplicate ? 200 : 202;
-    res.status(statusCode).json({ success: true, message: result.status === 'blocked' ? '该对话已达到 AI 生成频率上限' : result.duplicate ? '已返回此前的 AI 草稿任务' : 'AI 草稿任务已创建', data: { aiRunId: result.aiRunId, status: result.status } });
+    if (result.status === 'blocked') {
+      res.status(429).json({ success: false, message: '该对话已达到 AI 生成频率上限', code: 'AI_MAX_RUNS_EXCEEDED', data: { aiRunId: result.aiRunId, status: result.status } });
+      return;
+    }
+    res.status(result.duplicate ? 200 : 202).json({ success: true, message: result.duplicate ? '已返回此前的 AI 草稿任务' : 'AI 草稿任务已创建', data: { aiRunId: result.aiRunId, status: result.status } });
   } catch (error) { next(error); }
 });
 

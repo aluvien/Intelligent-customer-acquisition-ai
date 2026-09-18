@@ -107,24 +107,27 @@ router.post('/sessions/:sessionId/messages', async (req, res, next) => {
         const existing = await client.query<{ id: string; conversation_id: string; content: string }>(`SELECT id, conversation_id, content FROM messages WHERE tenant_id = $1 AND conversation_id = $2 AND external_message_id = $3`, [context.tenantId, conversationId, idempotencyKey]);
         if (!existing.rows[0]) throw new AppError(409, 'IDEMPOTENCY_RECORD_MISSING', '幂等记录已存在但消息记录缺失，请重试');
         if (existing.rows[0].content !== content) throw new AppError(409, 'IDEMPOTENCY_KEY_REUSED', 'Idempotency-Key 已用于另一条消息');
-        return { conversationId: existing.rows[0].conversation_id, messageId: existing.rows[0].id, aiRunId: undefined, mode, modeVersion, duplicate: true };
+        return { conversationId: existing.rows[0].conversation_id, messageId: existing.rows[0].id, aiRunId: undefined, aiRunStatus: undefined, mode, modeVersion, duplicate: true };
       }
       await client.query(`INSERT INTO messages(id, tenant_id, conversation_id, external_message_id, direction, sender_type, message_type, content, delivery_status, metadata) VALUES ($1, $2, $3, $4, 'inbound', 'visitor', 'web_message', $5, 'received', $6::jsonb)`, [messageId, context.tenantId, conversationId, idempotencyKey, content, JSON.stringify({ visitorSessionId: context.sessionId, standardEventVersion: '1' })]);
       await client.query('UPDATE conversations SET message_count = message_count + 1, last_message_at = NOW() WHERE id = $1', [conversationId]);
       const aiRunId = randomId();
+      let aiRunStatus: 'queued' | 'blocked' | undefined;
       if (mode !== 'human') {
         const budget = await client.query<{ count: string }>(`SELECT COUNT(*)::text AS count FROM ai_runs WHERE tenant_id = $1 AND conversation_id = $2 AND created_at >= NOW() - INTERVAL '1 hour'`, [context.tenantId, conversationId]);
         if (Number(budget.rows[0]?.count || 0) >= config.aiMaxRunsPerConversationHour) {
           await client.query(`INSERT INTO ai_runs(id, tenant_id, conversation_id, message_id, provider, status, error, completed_at) VALUES ($1, $2, $3, $4, $5, 'blocked', $6, NOW())`, [aiRunId, context.tenantId, conversationId, messageId, process.env.AI_PROVIDER || 'coze', 'AI_MAX_RUNS_PER_CONVERSATION_HOUR']);
+          aiRunStatus = 'blocked';
         } else {
           await client.query(`INSERT INTO ai_runs(id, tenant_id, conversation_id, message_id, provider, status) VALUES ($1, $2, $3, $4, $5, 'queued')`, [aiRunId, context.tenantId, conversationId, messageId, process.env.AI_PROVIDER || 'coze']);
           await insertJob(client, context.tenantId, 'ai_draft', { conversationId, messageId, aiRunId, modeVersion });
+          aiRunStatus = 'queued';
         }
       }
-      return { conversationId, messageId, aiRunId: mode === 'human' ? undefined : aiRunId, mode, modeVersion, duplicate: false };
+      return { conversationId, messageId, aiRunId: mode === 'human' ? undefined : aiRunId, aiRunStatus, mode, modeVersion, duplicate: false };
     });
     if (!result.duplicate) broadcast(context.tenantId, { type: 'message', data: { id: result.messageId, conversationId: result.conversationId, direction: 'inbound', senderType: 'visitor', content, deliveryStatus: 'received', createdAt: new Date().toISOString() }, timestamp: new Date().toISOString() });
-    res.status(result.duplicate ? 200 : 201).json({ success: true, message: result.duplicate ? '已返回此前的消息结果' : '消息已接收', data: { conversationId: result.conversationId, messageId: result.messageId, aiRunId: result.aiRunId || null } });
+    res.status(result.duplicate ? 200 : 201).json({ success: true, message: result.duplicate ? '已返回此前的消息结果' : '消息已接收', data: { conversationId: result.conversationId, messageId: result.messageId, aiRunId: result.aiRunId || null, aiRunStatus: result.aiRunStatus || null } });
   } catch (error) { next(error); }
 });
 
