@@ -57,6 +57,36 @@ export function encodeMessageCursor(createdAt: Date | string, id: string): strin
   return Buffer.from(JSON.stringify({ createdAt: value, id }), 'utf8').toString('base64url');
 }
 
+export type VisitorMessageCursor =
+  | { kind: 'sequence'; sequence: string; id: string }
+  | { kind: 'createdAt'; createdAt: string; id?: string };
+
+export function parseVisitorMessageCursor(raw: string | undefined): VisitorMessageCursor | undefined {
+  if (!raw) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(Buffer.from(raw, 'base64url').toString('utf8'));
+  } catch {
+    const legacy = new Date(raw);
+    if (!Number.isNaN(legacy.getTime())) return { kind: 'createdAt', createdAt: legacy.toISOString() };
+    throw new AppError(400, 'INVALID_CURSOR', '消息游标无效');
+  }
+  if (!parsed || typeof parsed !== 'object') throw new AppError(400, 'INVALID_CURSOR', '消息游标无效');
+  const value = parsed as { sequence?: unknown; createdAt?: unknown; id?: unknown };
+  if (typeof value.sequence === 'string' && /^\d{1,19}$/.test(value.sequence) && BigInt(value.sequence) <= 9_223_372_036_854_775_807n && typeof value.id === 'string' && value.id.length > 0 && value.id.length <= 200) {
+    return { kind: 'sequence', sequence: value.sequence, id: value.id };
+  }
+  const createdAt = typeof value.createdAt === 'string' ? value.createdAt : '';
+  if (!createdAt || Number.isNaN(new Date(createdAt).getTime()) || (value.id !== undefined && (typeof value.id !== 'string' || value.id.length > 200))) {
+    throw new AppError(400, 'INVALID_CURSOR', '消息游标无效');
+  }
+  return { kind: 'createdAt', createdAt, id: typeof value.id === 'string' && value.id ? value.id : undefined };
+}
+
+export function encodeVisitorMessageCursor(sequence: string, id: string): string {
+  return Buffer.from(JSON.stringify({ sequence, id }), 'utf8').toString('base64url');
+}
+
 export function isUniqueViolation(error: unknown): boolean {
   return Boolean(error && typeof error === 'object' && (
     ('code' in error && (error as { code?: string }).code === '23505') ||

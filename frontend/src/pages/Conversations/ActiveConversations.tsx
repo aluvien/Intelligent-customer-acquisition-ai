@@ -208,12 +208,14 @@ const ActiveConversations: React.FC = () => {
 
   const close = async () => {
     if (!selected) return;
+    const conversationId = selected.id;
     try {
-      await api.put(`/conversations/${selected.id}/close`);
+      await api.put(`/conversations/${conversationId}/close`);
       message.success('对话已关闭');
       await loadConversations();
+      if (selectedConversationId.current !== conversationId) return;
       setSelected((item) => {
-        if (!item) return item;
+        if (!item || item.id !== conversationId) return item;
         const closed = { ...item, status: 'closed' };
         selectedConversationRef.current = closed;
         return closed;

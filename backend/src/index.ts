@@ -14,7 +14,7 @@ import compression from 'compression';
 import rateLimit from 'express-rate-limit';
 import { config, assertProductionConfig } from './config';
 import { AppError, asAppError } from './errors';
-import { checkDatabase, pool } from './db';
+import { advisoryLockPool, checkDatabase, pool } from './db';
 import { requireAuth } from './middleware/auth';
 import authRoutes from './routes/auth';
 import realtimeRoutes from './routes/realtime';
@@ -103,6 +103,7 @@ async function shutdown(signal: string): Promise<void> {
   });
   await closeRealtimeRedis();
   await pool.end().catch(() => undefined);
+  await advisoryLockPool.end().catch(() => undefined);
 }
 
 process.once('SIGTERM', () => { void shutdown('SIGTERM'); });

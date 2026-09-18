@@ -6,7 +6,7 @@ const envFiles = [process.env.ENV_FILE, path.resolve(process.cwd(), '.env'), pat
 const envFile = envFiles.find((candidate) => fs.existsSync(candidate));
 if (envFile) dotenv.config({ path: envFile });
 
-import { pool, migrationsDirectory } from '../db';
+import { advisoryLockPool, pool, migrationsDirectory } from '../db';
 
 const MIGRATION_LOCK = '721634180238414127';
 
@@ -38,10 +38,12 @@ async function main(): Promise<void> {
     lockClient.release();
   }
   await pool.end();
+  await advisoryLockPool.end();
 }
 
 main().catch(async (error) => {
   console.error('数据库迁移失败:', error instanceof Error ? error.message : error);
   await pool.end().catch(() => undefined);
+  await advisoryLockPool.end().catch(() => undefined);
   process.exitCode = 1;
 });

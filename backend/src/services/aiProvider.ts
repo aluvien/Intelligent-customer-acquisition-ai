@@ -1,5 +1,5 @@
 import axios, { AxiosResponse } from 'axios';
-import { assertDatabaseConfigured, pool, query } from '../db';
+import { advisoryLockPool, assertDatabaseConfigured, query } from '../db';
 import { AppError } from '../errors';
 
 type KnowledgeDocument = { id: string; title: string; content: string; version: number };
@@ -310,7 +310,7 @@ async function generateWithCoze(tenantId: string, question: string, conversation
 
 async function withProviderConversationLock<T>(tenantId: string, conversationId: string, fn: () => Promise<T>): Promise<T> {
   assertDatabaseConfigured();
-  const client = await pool.connect().catch(() => {
+  const client = await advisoryLockPool.connect().catch(() => {
     throw new AppError(503, 'DATABASE_UNAVAILABLE', '数据库暂时不可用');
   });
   const lockKey = `coze:${tenantId}:${conversationId}`;

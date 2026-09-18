@@ -7,7 +7,7 @@ const envFiles = [process.env.ENV_FILE, path.resolve(process.cwd(), '.env'), pat
 const envFile = envFiles.find((candidate) => fs.existsSync(candidate));
 if (envFile) dotenv.config({ path: envFile });
 
-import { query, withTransaction, pool } from '../db';
+import { advisoryLockPool, query, withTransaction, pool } from '../db';
 import { randomId } from '../config';
 
 function required(name: string): string {
@@ -27,6 +27,7 @@ async function main(): Promise<void> {
   if (existing.rowCount) {
     console.log('管理员已存在，未覆盖现有密码。');
     await pool.end();
+    await advisoryLockPool.end();
     return;
   }
 
@@ -38,10 +39,12 @@ async function main(): Promise<void> {
   });
   console.log('管理员初始化完成。');
   await pool.end();
+  await advisoryLockPool.end();
 }
 
 main().catch(async (error) => {
   console.error('管理员初始化失败:', error instanceof Error ? error.message : error);
   await pool.end().catch(() => undefined);
+  await advisoryLockPool.end().catch(() => undefined);
   process.exitCode = 1;
 });

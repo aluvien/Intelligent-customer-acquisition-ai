@@ -5,7 +5,7 @@ process.env.ENCRYPTION_KEY = Buffer.alloc(32, 7).toString('base64');
 
 const { decryptSecret, encryptSecret } = require('../dist/security/crypto');
 const { extractCozeText } = require('../dist/services/aiProvider');
-const { encodeMessageCursor, parseMessageCursor } = require('../dist/routes/helpers');
+const { encodeMessageCursor, encodeVisitorMessageCursor, parseMessageCursor, parseVisitorMessageCursor } = require('../dist/routes/helpers');
 
 test('platform credentials are encrypted and decryptable', () => {
   const plaintext = 'provider-secret-value';
@@ -40,4 +40,13 @@ test('message cursors preserve PostgreSQL microseconds', () => {
 
   assert.equal(parsed.createdAt, timestamp);
   assert.equal(parsed.id, 'message-1');
+});
+
+test('visitor cursors use visibility sequence and accept the legacy boundary', () => {
+  const sequenceCursor = parseVisitorMessageCursor(encodeVisitorMessageCursor('42', 'message-42'));
+  assert.deepEqual(sequenceCursor, { kind: 'sequence', sequence: '42', id: 'message-42' });
+
+  const legacyCursor = parseVisitorMessageCursor(encodeMessageCursor('2026-09-19 04:05:06.123900+00', 'message-1'));
+  assert.deepEqual(legacyCursor, { kind: 'createdAt', createdAt: '2026-09-19 04:05:06.123900+00', id: 'message-1' });
+  assert.throws(() => parseVisitorMessageCursor(encodeVisitorMessageCursor('9999999999999999999', 'message-overflow')));
 });

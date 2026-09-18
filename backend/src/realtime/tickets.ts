@@ -16,6 +16,8 @@ let subscriberRetryTimer: NodeJS.Timeout | undefined;
 let subscriberRetryDelay = 1_000;
 let subscriberHandler: ((envelope: RealtimeEnvelope) => void) | null = null;
 let subscriberClosed = false;
+let subscriberGeneration = 0;
+let activeSubscriberGeneration = 0;
 const localTickets = new Map<string, { identity: RealtimeIdentity; expiresAt: number }>();
 const REALTIME_CHANNEL = 'xinglian:realtime:broadcast';
 
@@ -119,7 +121,16 @@ function scheduleSubscriberRetry(): void {
 async function openRealtimeSubscriber(): Promise<void> {
   if (subscriberClosed || realtimeSubscriber || subscriberStartPromise || !subscriberHandler || !config.redisUrl) return;
   const handler = subscriberHandler;
+  const generation = ++subscriberGeneration;
   let subscriber: Redis | undefined;
+  const isCurrent = () => realtimeSubscriber === subscriber && activeSubscriberGeneration === generation;
+  const retire = () => {
+    if (!isCurrent() || !subscriber) return;
+    realtimeSubscriber = null;
+    activeSubscriberGeneration = 0;
+    void subscriber.quit().catch(() => subscriber?.disconnect());
+    scheduleSubscriberRetry();
+  };
   const attempt = (async () => {
     const client = getRedis();
     if (!client) return;
@@ -128,16 +139,10 @@ async function openRealtimeSubscriber(): Promise<void> {
     subscriber = client.duplicate();
     subscriber.on('error', (error) => {
       console.error('Redis 实时订阅错误:', error.message);
-      if (realtimeSubscriber === subscriber) {
-        realtimeSubscriber = null;
-        scheduleSubscriberRetry();
-      }
+      retire();
     });
     subscriber.on('end', () => {
-      if (realtimeSubscriber === subscriber) {
-        realtimeSubscriber = null;
-        scheduleSubscriberRetry();
-      }
+      retire();
     });
     try {
       await subscriber.connect();
@@ -148,12 +153,14 @@ async function openRealtimeSubscriber(): Promise<void> {
         return;
       }
       realtimeSubscriber = subscriber;
+      activeSubscriberGeneration = generation;
       subscriberRetryDelay = 1_000;
     } catch (error) {
       await subscriber.quit().catch(() => subscriber?.disconnect());
       throw error;
     }
     subscriber.on('message', (_channel, raw) => {
+      if (!isCurrent()) return;
       try {
         const envelope = JSON.parse(raw) as RealtimeEnvelope;
         if (envelope && typeof envelope.origin === 'string' && typeof envelope.tenantId === 'string') handler(envelope);
@@ -174,12 +181,14 @@ async function openRealtimeSubscriber(): Promise<void> {
 }
 
 export function isRealtimeSubscriberReady(): boolean {
-  return !config.redisUrl || Boolean(realtimeSubscriber);
+  return !config.redisUrl || Boolean(realtimeSubscriber && activeSubscriberGeneration && realtimeSubscriber.status === 'ready');
 }
 
 export async function closeRealtimeRedis(): Promise<void> {
   subscriberClosed = true;
   subscriberHandler = null;
+  subscriberGeneration += 1;
+  activeSubscriberGeneration = 0;
   if (subscriberRetryTimer) clearTimeout(subscriberRetryTimer);
   subscriberRetryTimer = undefined;
   await subscriberStartPromise?.catch(() => undefined);

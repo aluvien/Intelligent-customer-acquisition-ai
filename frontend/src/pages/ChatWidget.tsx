@@ -23,6 +23,7 @@ const ChatWidget: React.FC = () => {
   const inputRevision = useRef(0);
   const sessionRef = useRef<Session | null>(null);
   const sessionGeneration = useRef(0);
+  const viewGeneration = useRef(0);
   const sessionRecovery = useRef<Promise<Session> | null>(null);
 
   const createSession = useCallback(async (): Promise<Session> => {
@@ -34,8 +35,9 @@ const ChatWidget: React.FC = () => {
 
   const loadMessages = useCallback(async (current: Session, before?: string, replace = false) => {
     const requestGeneration = sessionGeneration.current;
+    const requestViewGeneration = viewGeneration.current;
     const response = await api.get(`/public/sessions/${current.sessionId}/messages`, { params: before ? { before } : undefined, headers: { 'X-Visitor-Token': current.token } });
-    if (sessionGeneration.current !== requestGeneration || sessionRef.current?.sessionId !== current.sessionId) return;
+    if (viewGeneration.current !== requestViewGeneration || sessionGeneration.current !== requestGeneration || sessionRef.current?.sessionId !== current.sessionId) return;
     const nextMessages: ChatMessage[] = response.data.data.messages || [];
     if (before) {
       setMessages((items) => {
@@ -57,13 +59,28 @@ const ChatWidget: React.FC = () => {
     setHistoryCursor((currentValue) => before || replace || !currentValue ? nextCursor : currentValue || nextCursor);
   }, []);
 
-  const recoverSession = useCallback(async (): Promise<Session> => {
+  const recoverSession = useCallback(async (expectedSession?: Session, expectedSessionGeneration?: number, expectedViewGeneration?: number): Promise<Session> => {
     if (!widgetId) throw new Error('访客入口不存在');
+    const expectedStillCurrent = () => (
+      (expectedViewGeneration === undefined || viewGeneration.current === expectedViewGeneration)
+      && (expectedSessionGeneration === undefined || sessionGeneration.current === expectedSessionGeneration)
+      && (!expectedSession || sessionRef.current?.sessionId === expectedSession.sessionId)
+    );
+    if (!expectedStillCurrent()) {
+      if (sessionRef.current) return sessionRef.current;
+      throw new Error('访客页面已切换');
+    }
     if (sessionRecovery.current) return sessionRecovery.current;
     const key = `visitor-session:${widgetId}`;
+    const recoveryViewGeneration = viewGeneration.current;
     const recovery = (async () => {
+      if (!expectedStillCurrent()) {
+        if (sessionRef.current) return sessionRef.current;
+        throw new Error('访客页面已切换');
+      }
       sessionStorage.removeItem(key);
       const replacement = await createSession();
+      if (viewGeneration.current !== recoveryViewGeneration || !expectedStillCurrent()) throw new Error('访客页面已切换');
       sessionStorage.setItem(key, JSON.stringify(replacement));
       sessionGeneration.current += 1;
       sessionRef.current = replacement;
@@ -72,6 +89,7 @@ const ChatWidget: React.FC = () => {
       setHistoryCursor(null);
       setHistoryHasMore(false);
       await loadMessages(replacement, undefined, true);
+      if (viewGeneration.current !== recoveryViewGeneration || sessionRef.current?.sessionId !== replacement.sessionId) throw new Error('访客页面已切换');
       return replacement;
     })();
     sessionRecovery.current = recovery;
@@ -84,6 +102,7 @@ const ChatWidget: React.FC = () => {
 
   useEffect(() => {
     let active = true;
+    const initViewGeneration = ++viewGeneration.current;
     const init = async () => {
       if (!widgetId) return;
       try {
@@ -99,33 +118,46 @@ const ChatWidget: React.FC = () => {
         }
         if (!current) {
           current = await createSession();
-          sessionStorage.setItem(key, JSON.stringify(current));
         }
-        if (!active) return;
+        if (!active || viewGeneration.current !== initViewGeneration) return;
+        sessionStorage.setItem(key, JSON.stringify(current));
         sessionGeneration.current += 1;
         sessionRef.current = current;
         setSession(current);
+        const initSessionGeneration = sessionGeneration.current;
         try {
           await loadMessages(current, undefined, true);
         } catch (err: any) {
           if (err?.response?.status !== 401) throw err;
-          if (active) await recoverSession();
+          if (active && viewGeneration.current === initViewGeneration && sessionGeneration.current === initSessionGeneration && sessionRef.current?.sessionId === current.sessionId) {
+            await recoverSession(current, initSessionGeneration, initViewGeneration);
+          }
         }
-      } catch (err: any) { if (active) setError(err?.response?.data?.message || '访客入口暂不可用'); }
-      finally { if (active) setLoading(false); }
+      } catch (err: any) { if (active && viewGeneration.current === initViewGeneration) setError(err?.response?.data?.message || '访客入口暂不可用'); }
+      finally { if (active && viewGeneration.current === initViewGeneration) setLoading(false); }
     };
     void init();
-    return () => { active = false; };
+    return () => {
+      active = false;
+      if (viewGeneration.current === initViewGeneration) {
+        viewGeneration.current += 1;
+        sessionRecovery.current = null;
+      }
+    };
   }, [widgetId, createSession, loadMessages, recoverSession]);
 
   useEffect(() => {
     if (!session) return undefined;
+    const pollingViewGeneration = viewGeneration.current;
+    const pollingSessionGeneration = sessionGeneration.current;
+    const pollingSession = session;
     const timer = window.setInterval(() => {
       if (document.visibilityState !== 'visible') return;
       void loadMessages(session).catch(async (err: any) => {
         if (err?.response?.status !== 401 || !widgetId) return;
+        if (viewGeneration.current !== pollingViewGeneration || sessionGeneration.current !== pollingSessionGeneration || sessionRef.current?.sessionId !== pollingSession.sessionId) return;
         try {
-          await recoverSession();
+          await recoverSession(pollingSession, pollingSessionGeneration, pollingViewGeneration);
         } catch { /* The next poll or a user action will surface the error. */ }
       });
     }, 5000);
@@ -150,11 +182,12 @@ const ChatWidget: React.FC = () => {
     pendingMessageKey.current = pending;
     try {
       await api.post(`/public/sessions/${session.sessionId}/messages`, { content: messageContent }, { headers: { 'X-Visitor-Token': session.token, 'Idempotency-Key': pending.key } });
+      if (sessionRef.current?.sessionId !== session.sessionId) return;
       if (pendingMessageKey.current?.key === pending.key) pendingMessageKey.current = null;
       if (inputRevision.current === submittedRevision) setContent('');
       await loadMessages(session);
     }
-    catch (err: any) { message.error(err?.response?.data?.message || '消息发送失败'); }
+    catch (err: any) { if (sessionRef.current?.sessionId === session.sessionId) message.error(err?.response?.data?.message || '消息发送失败'); }
   };
 
   const submitLead = async () => {

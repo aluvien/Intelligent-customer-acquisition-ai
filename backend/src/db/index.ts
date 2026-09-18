@@ -4,17 +4,26 @@ import { Pool, PoolClient, QueryResult, QueryResultRow } from 'pg';
 import { config } from '../config';
 import { AppError } from '../errors';
 
-export const pool = new Pool({
+const poolOptions = {
   connectionString: config.databaseUrl || undefined,
-  max: Number(process.env.DB_POOL_MAX || 10),
   idleTimeoutMillis: 30_000,
   connectionTimeoutMillis: 5_000,
   ssl: process.env.DATABASE_SSL === 'true'
     ? { rejectUnauthorized: process.env.DATABASE_SSL_REJECT_UNAUTHORIZED !== 'false' }
     : undefined,
-});
+};
+
+export const pool = new Pool({ ...poolOptions, max: Number(process.env.DB_POOL_MAX || 10) });
 pool.on('error', (error) => {
   console.error('数据库连接池后台连接错误:', error instanceof Error ? error.message : error);
+});
+
+// Advisory locks must not consume a connection from the application pool.
+// Otherwise DB_POOL_MAX=1 deadlocks when the lock holder calls query(), and a
+// busy tenant can also starve unrelated request transactions.
+export const advisoryLockPool = new Pool({ ...poolOptions, max: Number(process.env.DB_ADVISORY_LOCK_POOL_MAX || 10) });
+advisoryLockPool.on('error', (error) => {
+  console.error('数据库 advisory lock 连接池后台连接错误:', error instanceof Error ? error.message : error);
 });
 
 export function assertDatabaseConfigured(): void {

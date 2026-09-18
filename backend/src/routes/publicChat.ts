@@ -4,7 +4,7 @@ import { config, hashOpaqueToken, randomId, randomOpaqueToken } from '../config'
 import { AppError } from '../errors';
 import { broadcast } from '../realtime/hub';
 import { insertJob } from '../jobs/worker';
-import { encodeMessageCursor, optionalText, parseMessageCursor, requireText } from './helpers';
+import { encodeVisitorMessageCursor, optionalText, parseVisitorMessageCursor, requireText } from './helpers';
 
 const router = express.Router();
 
@@ -53,24 +53,61 @@ router.post('/widgets/:widgetId/sessions', async (req, res, next) => {
 router.get('/sessions/:sessionId/messages', async (req, res, next) => {
   try {
     const context = await visitorContext(req);
-    const before = parseMessageCursor(typeof req.query.before === 'string' ? req.query.before : undefined);
+    const before = parseVisitorMessageCursor(typeof req.query.before === 'string' ? req.query.before : undefined);
     const messages = await withTransaction(async (client) => {
       const values: unknown[] = [context.tenantId, context.widgetId, context.visitorId];
-      const cursorFilter = before
-        ? before.id ? ` AND (created_at < $4 OR (created_at = $4 AND id < $5))` : ' AND created_at < $4'
-        : '';
-      if (before) values.push(before.createdAt);
-      if (before?.id) values.push(before.id);
-      const result = await client.query(`SELECT id, conversation_id AS "conversationId", direction, sender_type AS "senderType", content, delivery_status AS "deliveryStatus", created_at AS "createdAt", created_at::text AS "cursorCreatedAt" FROM messages WHERE tenant_id = $1 AND conversation_id IN (SELECT id FROM conversations WHERE tenant_id = $1 AND widget_id = $2 AND external_user_id = $3) AND (direction = 'inbound' OR delivery_status IN ('provider_accepted', 'delivered'))${cursorFilter} ORDER BY created_at DESC, id DESC LIMIT 200`, values);
+      let cursorFilter = '';
+      if (before?.kind === 'sequence') {
+        values.push(before.sequence, before.id);
+        cursorFilter = ' AND (visitor_visibility_seq < $4::bigint OR (visitor_visibility_seq = $4::bigint AND id < $5))';
+      } else if (before) {
+        // Convert the pre-009 timestamp cursor to the new visibility sequence
+        // when its boundary row still exists. This lets an old client switch
+        // to sequence pagination without skipping a recovered message.
+        const boundaryValues: unknown[] = [context.tenantId, context.widgetId, context.visitorId, before.createdAt];
+        const boundary = before.id
+          ? await client.query<{ visitor_visibility_seq: string }>(
+            `SELECT visitor_visibility_seq::text
+               FROM messages
+              WHERE tenant_id = $1
+                AND conversation_id IN (SELECT id FROM conversations WHERE tenant_id = $1 AND widget_id = $2 AND external_user_id = $3)
+                AND created_at = $4::timestamptz AND id = $5
+              LIMIT 1`,
+            [...boundaryValues, before.id],
+          )
+          : await client.query<{ visitor_visibility_seq: string }>(
+            `SELECT MAX(visitor_visibility_seq)::text AS visitor_visibility_seq
+               FROM messages
+              WHERE tenant_id = $1
+                AND conversation_id IN (SELECT id FROM conversations WHERE tenant_id = $1 AND widget_id = $2 AND external_user_id = $3)
+                AND created_at < $4::timestamptz`,
+            boundaryValues,
+          );
+        const sequence = boundary.rows[0]?.visitor_visibility_seq;
+        if (sequence) {
+          values.push(sequence);
+          if (before.id) {
+            values.push(before.id);
+            cursorFilter = ' AND (visitor_visibility_seq < $4::bigint OR (visitor_visibility_seq = $4::bigint AND id < $5))';
+          } else {
+            cursorFilter = ' AND visitor_visibility_seq < $4::bigint';
+          }
+        } else {
+          values.push(before.createdAt);
+          cursorFilter = before.id ? ' AND (created_at < $4 OR (created_at = $4 AND id < $5))' : ' AND created_at < $4';
+          if (before.id) values.push(before.id);
+        }
+      }
+      const result = await client.query(`SELECT id, conversation_id AS "conversationId", direction, sender_type AS "senderType", content, delivery_status AS "deliveryStatus", created_at AS "createdAt", visitor_visibility_seq AS "visitorVisibilitySeq" FROM messages WHERE tenant_id = $1 AND conversation_id IN (SELECT id FROM conversations WHERE tenant_id = $1 AND widget_id = $2 AND external_user_id = $3) AND (direction = 'inbound' OR delivery_status IN ('provider_accepted', 'delivered'))${cursorFilter} ORDER BY visitor_visibility_seq DESC, id DESC LIMIT 200`, values);
       const providerAcceptedIds = result.rows.filter((row) => row.deliveryStatus === 'provider_accepted').map((row) => row.id);
       if (providerAcceptedIds.length > 0) {
         await client.query(`UPDATE messages SET delivery_status = 'delivered' WHERE tenant_id = $1 AND id = ANY($2::text[]) AND delivery_status = 'provider_accepted'`, [context.tenantId, providerAcceptedIds]);
       }
-      const rows = result.rows.reverse().map(({ cursorCreatedAt: _cursorCreatedAt, ...row }) => providerAcceptedIds.includes(row.id) ? { ...row, deliveryStatus: 'delivered' } : row);
+      const rows = result.rows.reverse().map(({ visitorVisibilitySeq: _visitorVisibilitySeq, ...row }) => providerAcceptedIds.includes(row.id) ? { ...row, deliveryStatus: 'delivered' } : row);
       // `rows` is now oldest-to-newest after reverse(), so the first item is
       // the correct boundary for the next older page.
       const oldest = result.rows[0];
-      return { rows, hasMore: result.rowCount === 200, nextBefore: result.rowCount === 200 && oldest ? encodeMessageCursor(oldest.cursorCreatedAt, oldest.id) : null };
+      return { rows, hasMore: result.rowCount === 200, nextBefore: result.rowCount === 200 && oldest ? encodeVisitorMessageCursor(String(oldest.visitorVisibilitySeq), oldest.id) : null };
     });
     res.json({ success: true, message: '获取消息成功', data: { messages: messages.rows, pagination: { hasMore: messages.hasMore, nextBefore: messages.nextBefore } } });
   } catch (error) { next(error); }

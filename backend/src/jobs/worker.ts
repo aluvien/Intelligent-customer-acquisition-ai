@@ -136,6 +136,10 @@ async function fail(job: Job, error: unknown): Promise<void> {
   const terminal = job.attempts >= job.max_attempts || deterministicBlocked;
   const delaySeconds = Math.min(300, 2 ** Math.max(0, job.attempts - 1) * 5);
   await withTransaction(async (client) => {
+    // Hold the job row before touching its business records. If another
+    // worker reclaimed the lease, this transaction must do nothing and must
+    // not partially commit an ai_run/message transition.
+    await assertLeaseOnClient(client, job);
     if (job.type === 'ai_draft') {
       const aiRunId = typeof job.payload.aiRunId === 'string' ? job.payload.aiRunId : '';
       if (aiRunId) {
@@ -159,14 +163,17 @@ async function fail(job: Job, error: unknown): Promise<void> {
         await client.query(`UPDATE messages SET delivery_status = 'failed' WHERE id = $1 AND tenant_id = $2 AND delivery_status IN ('queued', 'sending') AND EXISTS (SELECT 1 FROM jobs WHERE id = $3 AND status = 'running' AND locked_by = $4)`, [messageId, job.tenant_id, job.id, WORKER_ID]);
       }
     }
-    await client.query(
+    const updatedJob = await client.query<{ id: string }>(
       `UPDATE jobs
           SET status = $3,
               run_after = NOW() + ($4 || ' seconds')::interval,
               locked_at = NULL, locked_by = NULL, last_error = $2, updated_at = NOW()
-        WHERE id = $1 AND locked_by = $5`,
+        WHERE id = $1 AND status = 'running' AND locked_by = $5
+          AND locked_at > NOW() - INTERVAL '2 minutes'
+        RETURNING id`,
       [job.id, message, terminal ? 'dead' : 'queued', String(delaySeconds), WORKER_ID],
     );
+    if (!updatedJob.rowCount) throw new AppError(409, 'JOB_LEASE_LOST', '任务租约已失效，失败状态未提交');
   });
 }
 
@@ -212,7 +219,8 @@ async function processWebDelivery(job: Job): Promise<void> {
       return undefined;
     }
     const accepted = await client.query<{ id: string }>(
-      `UPDATE messages SET delivery_status = 'provider_accepted'
+      `UPDATE messages SET delivery_status = 'provider_accepted',
+            visitor_visibility_seq = nextval('visitor_message_visibility_seq')
         WHERE id = $1 AND tenant_id = $2 AND delivery_status IN ('queued', 'sending')
           AND EXISTS (SELECT 1 FROM jobs WHERE id = $3 AND status = 'running' AND locked_by = $4 AND locked_at > NOW() - INTERVAL '2 minutes')
         RETURNING id`,
