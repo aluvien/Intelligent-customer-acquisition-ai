@@ -8,7 +8,7 @@
 | T1 构建/部署/安全 | source/config passed; image blocked | Docker/Compose 配置解析、Node 构建、前端构建、启动脚本和当前树凭据脱敏已验证；本机 Docker 守护进程未运行，未完成镜像构建 |
 | T2 数据库/认证 | passed locally | PostgreSQL 全量迁移（含全局大小写不敏感用户名唯一性、租户复合外键和 AI provider 会话字段）、真实用户/租户、原子刷新会话轮换、JWT 类型/租户状态校验、Redis WS ticket 和加密凭据已在临时 PostgreSQL 集成环境验证 |
 | T3 业务任务链路 | passed locally | 标准事件、访客/人工消息幂等、事务内持久化 job、租约续期与 fencing、模式版本校验、provider_accepted/delivered 边界、AI 调用上限和 Worker 已实现；仍需故障注入矩阵 |
-| T4 网页客服 | implemented; browser UX pending | 访客会话、公开聊天页面、客服工作台、实时通知和历史恢复已实现；HTTP/数据库链路通过，待双浏览器验收 |
+| T4 网页客服 | implemented; browser UX pending | 访客会话、公开聊天页面、客服工作台、实时通知、历史恢复和 AI 草稿断线恢复已实现；HTTP/数据库链路通过，待双浏览器验收 |
 | T5 AI 草稿 | implemented with provider validation pending | 已按 Coze v3 `additional_messages`、retrieve 轮询、消息列表严格 answer 提取、知识版本证据和 provider conversation 映射实现；真实凭据联调未执行 |
 | T6 接管/线索 | implemented; race tests pending | 人工/草稿/自动模式、模式版本、审批发送、客户主动留资和跟进表已实现；HTTP 集成已覆盖留资同意和人工回复幂等，待更完整竞态测试 |
 | T7 抖音能力核验 | blocked | 当前没有可安全使用的真实授权/权限/测试账号证据 |
