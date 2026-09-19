@@ -113,18 +113,28 @@ router.get('/', async (req, res) => {
     const account = await authorizeDouyinAccount(code);
     const encryptedCredentials = encryptSecret(JSON.stringify(account.credentials));
     await withTransaction(async (client) => {
-      const active = await client.query(
-        `SELECT 1
-           FROM auth_sessions s
-           JOIN users u ON u.id = s.user_id AND u.tenant_id = s.tenant_id
+      // Use the same user -> session lock order as logout/refresh. Re-reading the
+      // session only after acquiring both locks prevents a concurrent revoke or
+      // password change from being missed while this callback waits.
+      const activeUser = await client.query(
+        `SELECT u.id
+           FROM users u
            JOIN tenants t ON t.id = u.tenant_id
-          WHERE s.id = $1 AND s.user_id = $2 AND s.tenant_id = $3
-            AND s.revoked_at IS NULL AND s.expires_at > NOW()
+          WHERE u.id = $1 AND u.tenant_id = $2
             AND u.status = 'active' AND u.role = 'admin' AND t.status = 'active'
           FOR UPDATE OF u`,
+        [request.user_id, request.tenant_id],
+      );
+      if (!activeUser.rowCount) throw new AppError(400, 'OAUTH_SESSION_INVALID', '发起授权的管理员会话已失效');
+      const activeSession = await client.query(
+        `SELECT id
+           FROM auth_sessions
+          WHERE id = $1 AND user_id = $2 AND tenant_id = $3
+            AND revoked_at IS NULL AND expires_at > NOW()
+          FOR UPDATE`,
         [request.auth_session_id, request.user_id, request.tenant_id],
       );
-      if (!active.rowCount) throw new AppError(400, 'OAUTH_SESSION_INVALID', '发起授权的管理员会话已失效');
+      if (!activeSession.rowCount) throw new AppError(400, 'OAUTH_SESSION_INVALID', '发起授权的管理员会话已失效');
       const channelId = randomId();
       const inserted = await client.query<{ id: string }>(
         `INSERT INTO channel_accounts(id, tenant_id, platform, external_account_id, display_name, avatar, credentials_encrypted, status)

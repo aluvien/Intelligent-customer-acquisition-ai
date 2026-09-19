@@ -182,8 +182,13 @@ const DouyinPage: React.FC = () => {
       {authUrl && <Space direction="vertical" align="center" size="middle" style={{ width: '100%' }}>
         {oauthStatus === 'succeeded'
           ? <Alert type="success" showIcon message="账号添加成功" description="账号信息和加密凭据已保存，可以关闭窗口。" />
+          : ['failed', 'expired'].includes(oauthStatus)
+            ? <Space direction="vertical" align="center">
+              <Typography.Text type="secondary">这个一次性二维码已失效，请生成新的授权请求。</Typography.Text>
+              <Button type="primary" loading={creatingOauth} onClick={() => void startOAuth()}>重新生成二维码</Button>
+            </Space>
           : <>
-            <QRCode value={authUrl} size={224} status={oauthStatus === 'expired' ? 'expired' : 'active'} onRefresh={() => void startOAuth()} />
+            <QRCode value={authUrl} size={224} status="active" />
             <Typography.Text>请使用抖音 App 扫码并确认授权</Typography.Text>
             <Typography.Text type="secondary">二维码有效期至 {expiresAt ? new Date(expiresAt).toLocaleTimeString() : '-'}</Typography.Text>
             <Button onClick={() => window.open(authUrl, '_blank', 'noopener,noreferrer')}>打开抖音官方授权页</Button>

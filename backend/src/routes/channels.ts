@@ -9,7 +9,9 @@ import { tenantId } from './helpers';
 const router = express.Router();
 
 function mapChannel(row: Record<string, unknown>) {
-  const accountAuthorized = row.platform === 'douyin' && ['authorized', 'subscribed'].includes(String(row.status));
+  const accountAuthorized = row.platform === 'douyin'
+    && row.has_credentials === true
+    && ['authorized', 'subscribed'].includes(String(row.status));
   return {
     id: row.id,
     type: row.platform,
@@ -119,7 +121,7 @@ router.post('/douyin/stop', (_req, res) => res.status(503).json({ success: false
 
 router.get('/', async (req, res, next) => {
   try {
-    const result = await query(`SELECT id, platform, external_account_id, display_name, avatar, status, last_event_at, created_at FROM channel_accounts WHERE tenant_id = $1 ORDER BY created_at DESC`, [tenantId(req)]);
+    const result = await query(`SELECT id, platform, external_account_id, display_name, avatar, status, last_event_at, created_at, credentials_encrypted IS NOT NULL AS has_credentials FROM channel_accounts WHERE tenant_id = $1 ORDER BY created_at DESC`, [tenantId(req)]);
     res.json({ success: true, message: '获取渠道列表成功', data: { channels: result.rows.map(mapChannel) } });
   } catch (error) { next(error); }
 });
@@ -138,7 +140,7 @@ router.post('/', requireRole('admin'), async (req, res, next) => {
 
 router.get('/:id', async (req, res, next) => {
   try {
-    const result = await query(`SELECT id, platform, external_account_id, display_name, avatar, status, last_event_at, created_at FROM channel_accounts WHERE id = $1 AND tenant_id = $2`, [req.params.id, tenantId(req)]);
+    const result = await query(`SELECT id, platform, external_account_id, display_name, avatar, status, last_event_at, created_at, credentials_encrypted IS NOT NULL AS has_credentials FROM channel_accounts WHERE id = $1 AND tenant_id = $2`, [req.params.id, tenantId(req)]);
     if (!result.rowCount) throw new AppError(404, 'CHANNEL_NOT_FOUND', '渠道账号不存在');
     res.json({ success: true, message: '获取渠道成功', data: { channel: mapChannel(result.rows[0]) } });
   } catch (error) { next(error); }
@@ -149,7 +151,12 @@ router.patch('/:id', requireRole('admin'), async (req, res, next) => {
     const name = typeof req.body?.name === 'string' ? req.body.name.trim() : undefined;
     const status = ['authorized', 'subscribed', 'error', 'disabled', 'unconfigured'].includes(req.body?.status) ? req.body.status : undefined;
     if (!name && !status) throw new AppError(400, 'NO_CHANGES', '没有可更新字段');
-    const result = await query(`UPDATE channel_accounts SET display_name = COALESCE($1, display_name), status = COALESCE($2, status), updated_at = NOW() WHERE id = $3 AND tenant_id = $4 RETURNING id, platform, external_account_id, display_name, avatar, status, last_event_at, created_at`, [name || null, status || null, req.params.id, tenantId(req)]);
+    const current = await query<{ platform: string }>('SELECT platform FROM channel_accounts WHERE id = $1 AND tenant_id = $2', [req.params.id, tenantId(req)]);
+    if (!current.rowCount) throw new AppError(404, 'CHANNEL_NOT_FOUND', '渠道账号不存在');
+    if (current.rows[0].platform === 'douyin' && status && ['authorized', 'subscribed'].includes(status)) {
+      throw new AppError(409, 'DOUYIN_STATE_MANAGED', '抖音授权状态只能由官方 OAuth 和已验证的消息订阅流程更新');
+    }
+    const result = await query(`UPDATE channel_accounts SET display_name = COALESCE($1, display_name), status = COALESCE($2, status), updated_at = NOW() WHERE id = $3 AND tenant_id = $4 RETURNING id, platform, external_account_id, display_name, avatar, status, last_event_at, created_at, credentials_encrypted IS NOT NULL AS has_credentials`, [name || null, status || null, req.params.id, tenantId(req)]);
     if (!result.rowCount) throw new AppError(404, 'CHANNEL_NOT_FOUND', '渠道账号不存在');
     res.json({ success: true, message: '渠道已更新', data: { channel: mapChannel(result.rows[0]) } });
   } catch (error) { next(error); }
@@ -165,10 +172,14 @@ router.delete('/:id', requireRole('admin'), async (req, res, next) => {
 
 router.get('/:id/status', async (req, res, next) => {
   try {
-    const result = await query(`SELECT id, platform, status, last_event_at AS "lastEventAt" FROM channel_accounts WHERE id = $1 AND tenant_id = $2`, [req.params.id, tenantId(req)]);
+    const result = await query(`SELECT id, platform, status, last_event_at AS "lastEventAt", credentials_encrypted IS NOT NULL AS has_credentials FROM channel_accounts WHERE id = $1 AND tenant_id = $2`, [req.params.id, tenantId(req)]);
     if (!result.rowCount) throw new AppError(404, 'CHANNEL_NOT_FOUND', '渠道账号不存在');
-    const row = result.rows[0] as { status: string; platform: string };
-    res.json({ success: true, message: '获取渠道状态成功', data: { ...result.rows[0], connected: ['authorized', 'subscribed'].includes(row.status), subscription: row.status === 'subscribed', replyCapability: row.platform === 'web' ? 'verified' : 'unverified' } });
+    const row = result.rows[0] as { status: string; platform: string; has_credentials: boolean };
+    const accountAuthorized = row.platform === 'web'
+      ? ['authorized', 'subscribed'].includes(row.status)
+      : row.platform === 'douyin' && row.has_credentials && ['authorized', 'subscribed'].includes(row.status);
+    const messageVerified = row.platform === 'web';
+    res.json({ success: true, message: '获取渠道状态成功', data: { id: result.rows[0].id, platform: row.platform, status: row.status, lastEventAt: result.rows[0].lastEventAt, connected: accountAuthorized, subscription: messageVerified && row.status === 'subscribed', accountAuthorization: accountAuthorized ? 'verified' : 'unverified', messageCapability: messageVerified ? 'verified' : 'unverified', replyCapability: messageVerified ? 'verified' : 'unverified' } });
   } catch (error) { next(error); }
 });
 
