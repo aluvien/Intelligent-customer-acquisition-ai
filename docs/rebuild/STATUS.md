@@ -2,7 +2,7 @@
 
 更新时间：2026-09-19
 
-当前 main：`a68fb67`；对应 GitHub Actions：`35426614604`（completed/success）。
+当前代码基线：`a68fb67`；对应代码 CI：`35426614604`（completed/success）。
 
 | 阶段 | 状态 | 说明 |
 |---|---|---|
