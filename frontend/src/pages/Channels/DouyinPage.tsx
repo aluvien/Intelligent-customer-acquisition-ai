@@ -92,12 +92,15 @@ const DouyinPage: React.FC = () => {
         if (disposed) return;
         const next = response.data.data.status as OAuthStatus;
         setOauthStatus(next);
+        if (next === 'failed' || next === 'expired') {
+          setOauthError(response.data.data.errorMessage || '授权未完成，请重新生成二维码');
+        } else {
+          setOauthError('');
+        }
         if (next === 'succeeded' && completedRequest.current !== requestId) {
           completedRequest.current = requestId;
           message.success('抖音账号添加成功');
           await load();
-        } else if (next === 'failed' || next === 'expired') {
-          setOauthError(response.data.data.errorMessage || '授权未完成，请重新生成二维码');
         }
       } catch (err: any) {
         if (!disposed) setOauthError(err?.response?.data?.message || '查询授权状态失败');
