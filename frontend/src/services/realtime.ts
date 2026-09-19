@@ -6,6 +6,17 @@ export interface RealtimeEvents {
   onClose?: (code: number) => void;
 }
 
+function realtimeUrl(ticket: string): string {
+  const configuredBase = process.env.REACT_APP_WS_URL?.trim();
+  const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
+  const base = configuredBase
+    ? configuredBase.replace(/\/+$/, '')
+    : process.env.NODE_ENV === 'development'
+      ? `${protocol}://${window.location.hostname}:3001`
+      : `${protocol}://${window.location.host}`;
+  return `${base}/ws?ticket=${encodeURIComponent(ticket)}`;
+}
+
 // 实时连接：先用登录 JWT 换一次性 ticket，再建 WS（token 永不拼进 URL）
 // Web 与未来桌面端（Electron/Tauri）走同一契约：
 //   GET /api/ws/ticket -> ws(s)://host/ws?ticket=xxx
@@ -42,8 +53,7 @@ export function connectRealtime(
 
       if (closed) return;
 
-      const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
-      socket = new WebSocket(`${proto}://${window.location.host}/ws?ticket=${ticket}`);
+      socket = new WebSocket(realtimeUrl(ticket));
 
       socket.onopen = () => {
         retries = 0;

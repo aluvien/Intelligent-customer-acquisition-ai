@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Form, Input, Button, Card, message, Tabs, Checkbox, Tag } from 'antd';
+import { Form, Input, Button, Card, message, Tabs, Checkbox, Tag, Alert } from 'antd';
 import { UserOutlined, LockOutlined, MailOutlined, TeamOutlined, SafetyOutlined } from '@ant-design/icons';
 import { useAuth } from '../contexts/AuthContext';
 import { useNavigate, useLocation } from 'react-router-dom';
@@ -9,6 +9,7 @@ const Login: React.FC = () => {
   const [loginForm] = Form.useForm();
   const [registerForm] = Form.useForm();
   const [loading, setLoading] = useState(false);
+  const [loginError, setLoginError] = useState<string | null>(null);
   const { login, register } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
@@ -28,6 +29,7 @@ const Login: React.FC = () => {
   }, [loginForm]);
 
   const handleLogin = async (values: any) => {
+    setLoginError(null);
     setLoading(true);
     try {
       // 记住我只保存用户名，明文密码永不持久化
@@ -43,7 +45,9 @@ const Login: React.FC = () => {
       message.success('登录成功，欢迎回来');
       navigate(from, { replace: true });
     } catch (error: any) {
-      message.error(error?.response?.data?.message || error?.message || '登录失败，请检查用户名和密码');
+      const errorMessage = error?.response?.data?.message || error?.message || '登录失败，请检查用户名和密码';
+      setLoginError(errorMessage);
+      message.error(errorMessage);
     } finally {
       setLoading(false);
     }
@@ -138,6 +142,7 @@ const Login: React.FC = () => {
                   form={loginForm}
                   name="login"
                   onFinish={handleLogin}
+                  onValuesChange={() => setLoginError(null)}
                   autoComplete="off"
                   size="large"
                 >
@@ -160,6 +165,15 @@ const Login: React.FC = () => {
                       placeholder="密码"
                     />
                   </Form.Item>
+
+                  {loginError && (
+                    <Alert
+                      type="error"
+                      showIcon
+                      message={loginError}
+                      style={{ marginBottom: 16 }}
+                    />
+                  )}
 
                   <Form.Item>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
