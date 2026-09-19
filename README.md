@@ -1,6 +1,6 @@
 # 星链云客系统（LinkBot-AI）
 
-这是一个多租户客户服务 MVP：管理后台、持久化客户会话、人工回复队列、客户在线咨询入口、留资和 AI 草稿审核。当前真实可用的渠道是 Web 客户咨询；抖音、快手、视频号和小红书能力在完成官方权限与真实收发证据前保持 `unverified`，不会模拟授权、监听或回复成功。
+这是一个多租户客户服务 MVP：管理后台、持久化客户会话、人工回复队列、客户在线咨询入口、留资和 AI 草稿审核。当前真实可用的消息渠道是 Web 客户咨询；抖音已实现网站应用 OAuth 扫码添加账号，但评论、私信、直播和回复能力仍需官方权限与真实收发证据。快手、视频号和小红书保持 `unverified`，不会模拟授权、监听或回复成功。
 
 ## 当前架构
 
@@ -40,6 +40,17 @@ COZE_TOKEN=your-server-token
 ```
 
 真实 Token 只放在服务端密钥管理中，详见 [`Coze配置指南.md`](Coze配置指南.md)。
+
+抖音账号通过“渠道中心 → 抖音渠道 → 添加抖音账号”扫码授权。先在抖音开放平台创建并审核网站应用，把下面的 HTTPS 地址登记为授权回调，再把配置放入服务端环境变量：
+
+```dotenv
+DOUYIN_APP_ID=your-client-key
+DOUYIN_APP_SECRET=your-client-secret
+DOUYIN_REDIRECT_URI=https://your-admin-domain.example/api/channels/douyin/oauth/callback
+DOUYIN_SCOPES=user_info
+```
+
+授权请求与当前管理员会话绑定并且只能使用一次；access token、refresh token 只会加密写入 PostgreSQL，不返回浏览器。`user_info` 只完成账号身份授权，不代表评论、私信或直播消息能力已经可用。
 
 ```bash
 docker compose up -d --build
@@ -95,7 +106,7 @@ npm start
 
 访客入口的 `allowedOrigins` 必须通过认证后的 `/api/widgets` 接口显式配置；未配置来源的入口只接受没有浏览器 `Origin` 的服务端/本地诊断请求，不会默认放开跨站访问。客户提交联系方式时必须勾选同意项，后端会记录同意时间和版本。
 
-明确未完成的模块会返回 `501 FEATURE_NOT_IMPLEMENTED` 或 `503 PLATFORM_UNVERIFIED`，不返回演示套餐、随机指标、假 OAuth 或固定回复：计费、意图规则、未核验平台适配和部分工作流页面仍需单独实现。
+明确未完成的模块会返回 `501 FEATURE_NOT_IMPLEMENTED` 或 `503 PLATFORM_UNVERIFIED`，不返回演示套餐、随机指标、假 OAuth 或固定回复：计费、意图规则、未核验的平台消息适配和部分工作流页面仍需单独实现。抖音 OAuth 未配置时返回 `DOUYIN_NOT_CONFIGURED`，配置错误时返回 `DOUYIN_CONFIG_INVALID`。
 
 抖音核验清单见 [`docs/rebuild/DOUYIN_CAPABILITY_MATRIX.md`](docs/rebuild/DOUYIN_CAPABILITY_MATRIX.md)；总体状态见 [`docs/rebuild/STATUS.md`](docs/rebuild/STATUS.md)。
 

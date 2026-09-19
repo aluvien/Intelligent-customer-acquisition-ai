@@ -19,6 +19,10 @@ services:
       TRUST_PROXY_HOPS: "0"
       PUBLIC_RATE_LIMIT_MAX_REQUESTS: ${PUBLIC_RATE_LIMIT_MAX_REQUESTS:-400}
       AI_MAX_RUNS_PER_CONVERSATION_HOUR: ${AI_MAX_RUNS_PER_CONVERSATION_HOUR:-20}
+      DOUYIN_APP_ID: ${DOUYIN_APP_ID:-}
+      DOUYIN_APP_SECRET: ${DOUYIN_APP_SECRET:-}
+      DOUYIN_REDIRECT_URI: ${DOUYIN_REDIRECT_URI:-}
+      DOUYIN_SCOPES: ${DOUYIN_SCOPES:-user_info}
     command: ["sh", "-c", "npm run migrate && npm run dev"]
     volumes:
       - ./backend/src:/app/src

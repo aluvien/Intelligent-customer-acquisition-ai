@@ -58,6 +58,10 @@ export const config = {
   publicRateLimitMaxRequests: positiveIntEnv('PUBLIC_RATE_LIMIT_MAX_REQUESTS', 400, 100_000),
   aiMaxRunsPerConversationHour: positiveIntEnv('AI_MAX_RUNS_PER_CONVERSATION_HOUR', 20, 1_000),
   trustProxyHops: nonNegativeIntEnv('TRUST_PROXY_HOPS', 0, 10),
+  douyinClientKey: process.env.DOUYIN_APP_ID?.trim() || '',
+  douyinClientSecret: process.env.DOUYIN_APP_SECRET?.trim() || '',
+  douyinRedirectUri: process.env.DOUYIN_REDIRECT_URI?.trim() || '',
+  douyinScopes: optional('DOUYIN_SCOPES', 'user_info'),
   jwtSecretEntropy: process.env.JWT_SECRET?.length || 0,
 };
 

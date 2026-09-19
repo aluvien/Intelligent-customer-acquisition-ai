@@ -124,6 +124,8 @@ async function cleanupExpiredVisitorSessions(): Promise<void> {
   if (Date.now() - lastVisitorCleanup < 300_000) return;
   lastVisitorCleanup = Date.now();
   await query(`DELETE FROM visitor_sessions WHERE expires_at < NOW() - INTERVAL '24 hours'`);
+  await query(`UPDATE channel_oauth_requests SET status = 'expired', error_code = 'OAUTH_REQUEST_EXPIRED', error_message = '二维码已过期，请重新生成', updated_at = NOW() WHERE (status = 'pending' AND expires_at < NOW()) OR (status = 'processing' AND expires_at < NOW() - INTERVAL '1 minute')`);
+  await query(`DELETE FROM channel_oauth_requests WHERE expires_at < NOW() - INTERVAL '7 days'`);
 }
 
 async function complete(job: Job): Promise<void> {

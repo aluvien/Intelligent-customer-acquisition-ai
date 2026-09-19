@@ -1,13 +1,15 @@
 import express from 'express';
 import { query } from '../db';
-import { randomId } from '../config';
+import { hashOpaqueToken, randomId, randomOpaqueToken } from '../config';
 import { AppError } from '../errors';
 import { requireRole } from '../middleware/auth';
+import { buildDouyinAuthorizeUrl, douyinOAuthConfigStatus, getDouyinOAuthConfig } from '../services/douyinOAuth';
 import { tenantId } from './helpers';
 
 const router = express.Router();
 
 function mapChannel(row: Record<string, unknown>) {
+  const accountAuthorized = row.platform === 'douyin' && ['authorized', 'subscribed'].includes(String(row.status));
   return {
     id: row.id,
     type: row.platform,
@@ -19,12 +21,99 @@ function mapChannel(row: Record<string, unknown>) {
     lastHeartbeat: row.last_event_at,
     config: { autoReply: false, keywords: [], welcomeMessage: '', silenceTimeout: 0, maxConcurrent: 0 },
     createdAt: row.created_at,
-    capability: row.platform === 'web' ? 'verified' : 'unverified',
+    capability: row.platform === 'web' ? 'verified' : accountAuthorized ? 'account_authorized' : 'unverified',
+    accountAuthorization: row.platform === 'web' || accountAuthorized ? 'verified' : 'unverified',
+    messageCapability: row.platform === 'web' ? 'verified' : 'unverified',
   };
 }
 
-router.get('/douyin/oauth/url', (_req, res) => res.status(503).json({ success: false, message: '抖音 OAuth 尚未完成当前应用的真实权限核验', code: 'PLATFORM_UNVERIFIED' }));
-router.get('/douyin/oauth/callback', (_req, res) => res.status(503).json({ success: false, message: '抖音 OAuth 回调暂未启用，避免未经验证的授权流程', code: 'PLATFORM_UNVERIFIED' }));
+router.get('/douyin/oauth/config', requireRole('admin'), (_req, res) => {
+  const status = douyinOAuthConfigStatus();
+  res.json({
+    success: true,
+    message: status.configured ? '抖音账号授权已配置' : '抖音账号授权需要完成服务端配置',
+    data: { ...status, messageCapability: 'unverified' },
+  });
+});
+
+router.post('/douyin/oauth/requests', requireRole('admin'), async (req, res, next) => {
+  try {
+    const oauth = getDouyinOAuthConfig();
+    const requestId = randomId();
+    const state = randomOpaqueToken();
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+    await query(
+      `INSERT INTO channel_oauth_requests(id, tenant_id, user_id, auth_session_id, platform, state_hash, expires_at)
+       VALUES ($1, $2, $3, $4, 'douyin', $5, $6)`,
+      [requestId, tenantId(req), req.auth!.userId, req.auth!.sessionId, hashOpaqueToken(state), expiresAt],
+    );
+    res.status(201).json({
+      success: true,
+      message: '抖音扫码授权请求已创建',
+      data: { requestId, authUrl: buildDouyinAuthorizeUrl(oauth, state), expiresAt: expiresAt.toISOString() },
+    });
+  } catch (error) { next(error); }
+});
+
+router.get('/douyin/oauth/requests/:requestId', requireRole('admin'), async (req, res, next) => {
+  try {
+    let result = await query<{
+      status: 'pending' | 'processing' | 'succeeded' | 'failed' | 'expired';
+      channel_account_id: string | null;
+      error_code: string | null;
+      error_message: string | null;
+      expires_at: Date;
+    }>(
+      `SELECT status, channel_account_id, error_code, error_message, expires_at
+         FROM channel_oauth_requests
+        WHERE id = $1 AND tenant_id = $2 AND user_id = $3 AND auth_session_id = $4 AND platform = 'douyin'`,
+      [req.params.requestId, tenantId(req), req.auth!.userId, req.auth!.sessionId],
+    );
+    if (!result.rowCount) throw new AppError(404, 'OAUTH_REQUEST_NOT_FOUND', '扫码授权请求不存在');
+    const current = result.rows[0];
+    const expired = current.status === 'pending'
+      ? current.expires_at <= new Date()
+      : current.status === 'processing' && current.expires_at.getTime() <= Date.now() - 60_000;
+    if (expired) {
+      const expiration = await query<{
+        status: 'pending' | 'processing' | 'succeeded' | 'failed' | 'expired';
+        channel_account_id: string | null;
+        error_code: string | null;
+        error_message: string | null;
+        expires_at: Date;
+      }>(
+        `UPDATE channel_oauth_requests
+            SET status = 'expired', error_code = 'OAUTH_REQUEST_EXPIRED', error_message = '二维码已过期，请重新生成', updated_at = NOW()
+          WHERE id = $1 AND tenant_id = $2 AND user_id = $3 AND auth_session_id = $4
+            AND (status = 'pending' OR (status = 'processing' AND expires_at < NOW() - INTERVAL '1 minute'))
+          RETURNING status, channel_account_id, error_code, error_message, expires_at`,
+        [req.params.requestId, tenantId(req), req.auth!.userId, req.auth!.sessionId],
+      );
+      if (expiration.rowCount) result = expiration;
+      else {
+        result = await query(
+          `SELECT status, channel_account_id, error_code, error_message, expires_at
+             FROM channel_oauth_requests
+            WHERE id = $1 AND tenant_id = $2 AND user_id = $3 AND auth_session_id = $4 AND platform = 'douyin'`,
+          [req.params.requestId, tenantId(req), req.auth!.userId, req.auth!.sessionId],
+        );
+      }
+    }
+    const row = result.rows[0];
+    res.json({
+      success: true,
+      message: '获取扫码授权状态成功',
+      data: {
+        status: row.status,
+        channelAccountId: row.channel_account_id,
+        errorCode: row.error_code,
+        errorMessage: row.error_message,
+        expiresAt: row.expires_at,
+      },
+    });
+  } catch (error) { next(error); }
+});
+
 router.post('/douyin/start', (_req, res) => res.status(503).json({ success: false, message: '抖音监听能力尚未完成真实核验', code: 'PLATFORM_UNVERIFIED' }));
 router.post('/douyin/stop', (_req, res) => res.status(503).json({ success: false, message: '抖音监听能力尚未完成真实核验', code: 'PLATFORM_UNVERIFIED' }));
 

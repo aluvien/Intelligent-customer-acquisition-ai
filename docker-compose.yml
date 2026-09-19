@@ -51,6 +51,10 @@ services:
       COZE_API_URL: ${COZE_API_URL:-}
       COZE_BOT_ID: ${COZE_BOT_ID:-}
       COZE_TOKEN: ${COZE_TOKEN:-}
+      DOUYIN_APP_ID: ${DOUYIN_APP_ID:-}
+      DOUYIN_APP_SECRET: ${DOUYIN_APP_SECRET:-}
+      DOUYIN_REDIRECT_URI: ${DOUYIN_REDIRECT_URI:-}
+      DOUYIN_SCOPES: ${DOUYIN_SCOPES:-user_info}
     command: ["sh", "-c", "npm run migrate && npm start"]
     depends_on:
       postgres: { condition: service_healthy }
