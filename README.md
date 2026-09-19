@@ -80,7 +80,7 @@ npm ci
 npm start
 ```
 
-本地 API 默认 `http://localhost:3001`，前端默认 `http://localhost:3000`。开发 Compose 会把 `/api` 和 `/ws` 代理到 `backend` 服务；分别启动前端时则代理到 `localhost:3001`。数据库迁移文件位于 `backend/src/db/migrations/`，迁移脚本使用 PostgreSQL advisory lock，避免多个实例并发执行同一迁移。
+本地 API 默认 `http://localhost:3001`，前端默认 `http://localhost:3000`。CRA 开发服务器只将 `/api` 代理到 `backend`，并保留 `/ws` 供热更新；应用实时 WebSocket 在开发环境默认直连当前主机的 `:3001/ws`，也可通过 `REACT_APP_WS_URL` 指定 WS/WSS 地址。生产环境则由 Nginx 通过同源 `/ws` 转发到 backend。数据库迁移文件位于 `backend/src/db/migrations/`，迁移脚本使用 PostgreSQL advisory lock，避免多个实例并发执行同一迁移。
 
 ## 能力边界
 
